@@ -49,6 +49,7 @@ engine/
     tools/
       mapshot.cpp        # standalone map screenshot tool
       modelshot.cpp      # standalone model screenshot tool
+      mdlbatchtest.cpp   # batch-load a list of .mdl files, report pass/fail per file
 ```
 
 ## Status: what works today
@@ -63,7 +64,8 @@ engine/
 - [x] BSP hull collision (hull 1 / player box) — movement blocked and slid against solid geometry, same method as the original engine (`SV_HullPointContents`)
 - [x] MDL v10 parser: bone hierarchy, bind-pose skeleton, palette-indexed textures, body parts/meshes, triangle strips & fans
 - [x] Character models render correctly (verified against real player models, e.g. `urban.mdl`)
-- All of the above verified against real CS 1.5 release assets (`de_dust2.bsp`, multiple `.wad` files, `urban.mdl`), not just compiled
+- [x] All weapon models load: 87/87 view (`v_*`), world (`w_*`), and pickup (`p_*`) models parse successfully, incl. knives, grenades, C4, shield
+- All of the above verified against real CS 1.5 release assets (`de_dust2.bsp`, multiple `.wad` files, `urban.mdl`, all 87 weapon models), not just compiled
 
 ## To Do — what's still needed for a full, playable Counter-Strike
 
@@ -77,7 +79,7 @@ engine/
 - [ ] SPR sprite format support (used for effects, some HUD elements)
 - [ ] MDL animation playback (currently only the static bind pose renders — no walk/run/shoot animation blending, no sequence system)
 - [ ] MDL attachment points (muzzle flash origin, weapon-to-hand attachment, etc.)
-- [ ] View model (first-person weapon model) rendering, separate from world model
+- [ ] View model (first-person weapon model) rendering *in the main engine window* — assets load and render correctly via `modelshot` already, just not wired into `main.cpp` yet
 
 ### Physics & Movement
 - [ ] Proper player movement: gravity, jumping, ducking, ground friction, air control (currently a pure free-fly camera with only collision blocking)
@@ -87,7 +89,7 @@ engine/
 
 ### Gameplay Systems
 - [ ] Entity system (parse and instantiate all entity classes from the BSP entity lump — currently only `info_player_start`/`info_player_deathmatch` are read)
-- [ ] Weapon system: models, firing, damage, recoil, ammo
+- [ ] Weapon system: firing, damage, recoil, ammo, switching (models already load — see above)
 - [ ] Player health/armor/death/respawn
 - [ ] Round system: buy time, round win/loss conditions, economy
 - [ ] Bomb defusal mode logic (plant/defuse, `de_` maps)

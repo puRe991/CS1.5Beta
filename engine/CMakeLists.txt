@@ -34,3 +34,10 @@ add_executable(modelshot
 )
 target_include_directories(modelshot PRIVATE ${SDL2_INCLUDE_DIRS} src)
 target_link_libraries(modelshot PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
+
+# Debug tool: loads a list of .mdl files and reports parse pass/fail per file.
+add_executable(mdlbatchtest
+    src/tools/mdlbatchtest.cpp
+    src/assets/mdl.cpp
+)
+target_include_directories(mdlbatchtest PRIVATE src)
