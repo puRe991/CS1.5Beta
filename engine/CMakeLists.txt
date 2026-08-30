@@ -10,6 +10,8 @@ find_package(OpenGL REQUIRED)
 add_executable(cs15engine
     src/main.cpp
     src/camera.cpp
+    src/assets/pak.cpp
+    src/assets/wad.cpp
 )
 
 target_include_directories(cs15engine PRIVATE ${SDL2_INCLUDE_DIRS} src)
