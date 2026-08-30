@@ -12,7 +12,17 @@ add_executable(cs15engine
     src/camera.cpp
     src/assets/pak.cpp
     src/assets/wad.cpp
+    src/assets/bsp.cpp
 )
 
 target_include_directories(cs15engine PRIVATE ${SDL2_INCLUDE_DIRS} src)
 target_link_libraries(cs15engine PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
+
+# Standalone debug tool: renders one frame of a BSP map to a BMP file.
+add_executable(mapshot
+    src/tools/mapshot.cpp
+    src/assets/bsp.cpp
+    src/assets/wad.cpp
+)
+target_include_directories(mapshot PRIVATE ${SDL2_INCLUDE_DIRS} src)
+target_link_libraries(mapshot PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
