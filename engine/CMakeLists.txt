@@ -26,3 +26,11 @@ add_executable(mapshot
 )
 target_include_directories(mapshot PRIVATE ${SDL2_INCLUDE_DIRS} src)
 target_link_libraries(mapshot PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
+
+# Standalone debug tool: renders one frame of an MDL character model to a BMP file.
+add_executable(modelshot
+    src/tools/modelshot.cpp
+    src/assets/mdl.cpp
+)
+target_include_directories(modelshot PRIVATE ${SDL2_INCLUDE_DIRS} src)
+target_link_libraries(modelshot PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
