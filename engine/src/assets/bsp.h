@@ -39,10 +39,27 @@ public:
     const std::vector<BspTexture>& textures() const { return textures_; }
     const std::vector<BspEntity>& entities() const { return entities_; }
 
+    // True if `point` (a player origin) sits inside solid geometry, tested against
+    // hull 1 (the standard player-sized box hull), same as the original engine's
+    // SV_HullPointContents — no separate box-vs-geometry test needed since the
+    // clipnode planes are already offset to account for the hull's extents.
+    bool pointInSolid(Vec3 point) const;
+
 private:
+    struct Plane {
+        float nx, ny, nz, dist;
+    };
+    struct ClipNode {
+        int32_t planeNum;
+        int16_t children[2];
+    };
+
     std::vector<BspFace> faces_;
     std::vector<BspTexture> textures_;
     std::vector<BspEntity> entities_;
+    std::vector<Plane> planes_;
+    std::vector<ClipNode> clipNodes_;
+    int32_t hull1HeadNode_ = -1;
 
     void parseEntities(const std::string& entityText);
 };

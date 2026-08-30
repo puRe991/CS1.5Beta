@@ -6,6 +6,8 @@ struct Camera {
     float yaw = 0.0f;   // rotation in the XY plane, degrees
     float pitch = 0.0f; // up/down, degrees
 
-    void move(float forward, float strafe, float up, float dt);
+    // Returns the movement delta for this frame without applying it, so the
+    // caller can collision-test the candidate position first.
+    void wishDelta(float forward, float strafe, float up, float dt, float& dx, float& dy, float& dz) const;
     void look(float dxPixels, float dyPixels);
 };

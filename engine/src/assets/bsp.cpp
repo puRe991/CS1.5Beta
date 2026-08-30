@@ -10,13 +10,18 @@
 namespace {
 
 constexpr int kLumpEntities = 0;
+constexpr int kLumpPlanes = 1;
 constexpr int kLumpTextures = 2;
 constexpr int kLumpVertexes = 3;
 constexpr int kLumpTexInfo = 6;
 constexpr int kLumpFaces = 7;
+constexpr int kLumpClipNodes = 9;
 constexpr int kLumpEdges = 12;
 constexpr int kLumpSurfEdges = 13;
+constexpr int kLumpModels = 14;
 constexpr int kLumpCount = 15;
+
+constexpr int32_t kContentsSolid = -2;
 
 struct Lump {
     int32_t fileOfs;
@@ -53,6 +58,25 @@ struct MipTexHeader {
     uint32_t width;
     uint32_t height;
     uint32_t offsets[4];
+};
+
+struct DPlane {
+    float normal[3];
+    float dist;
+    int32_t type;
+};
+
+struct DClipNode {
+    int32_t planeNum;
+    int16_t children[2];
+};
+
+struct DModel {
+    float mins[3], maxs[3];
+    float origin[3];
+    int32_t headNode[4]; // one BSP tree per hull: 0=point, 1=player box, 2=large box, 3=crouch box
+    int32_t visLeafs;
+    int32_t firstFace, numFaces;
 };
 
 std::string toLower(std::string s) {
@@ -118,15 +142,36 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     }
 
     std::vector<uint8_t> entityData, texData, vertexData, texInfoData, faceData, edgeData, surfEdgeData;
+    std::vector<uint8_t> planeData, clipNodeData, modelData;
     bool ok = readLump(f, header.lumps[kLumpEntities], entityData) &&
               readLump(f, header.lumps[kLumpTextures], texData) &&
               readLump(f, header.lumps[kLumpVertexes], vertexData) &&
               readLump(f, header.lumps[kLumpTexInfo], texInfoData) &&
               readLump(f, header.lumps[kLumpFaces], faceData) &&
               readLump(f, header.lumps[kLumpEdges], edgeData) &&
-              readLump(f, header.lumps[kLumpSurfEdges], surfEdgeData);
+              readLump(f, header.lumps[kLumpSurfEdges], surfEdgeData) &&
+              readLump(f, header.lumps[kLumpPlanes], planeData) &&
+              readLump(f, header.lumps[kLumpClipNodes], clipNodeData) &&
+              readLump(f, header.lumps[kLumpModels], modelData);
     std::fclose(f);
     if (!ok) return false;
+
+    planes_.clear();
+    for (size_t o = 0; o + sizeof(DPlane) <= planeData.size(); o += sizeof(DPlane)) {
+        const DPlane* p = reinterpret_cast<const DPlane*>(planeData.data() + o);
+        planes_.push_back({p->normal[0], p->normal[1], p->normal[2], p->dist});
+    }
+
+    clipNodes_.clear();
+    for (size_t o = 0; o + sizeof(DClipNode) <= clipNodeData.size(); o += sizeof(DClipNode)) {
+        const DClipNode* c = reinterpret_cast<const DClipNode*>(clipNodeData.data() + o);
+        clipNodes_.push_back({c->planeNum, {c->children[0], c->children[1]}});
+    }
+
+    hull1HeadNode_ = -1;
+    if (modelData.size() >= sizeof(DModel)) {
+        hull1HeadNode_ = reinterpret_cast<const DModel*>(modelData.data())->headNode[1];
+    }
 
     parseEntities(std::string(entityData.begin(), entityData.end()));
 
@@ -261,4 +306,18 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     (void)numEdges;
     (void)numSurfEdges;
     return true;
+}
+
+bool BspMap::pointInSolid(Vec3 point) const {
+    if (hull1HeadNode_ < 0 || clipNodes_.empty()) return false;
+
+    int32_t node = hull1HeadNode_;
+    while (node >= 0) {
+        const ClipNode& cn = clipNodes_[node];
+        if (cn.planeNum < 0 || (size_t)cn.planeNum >= planes_.size()) return false;
+        const Plane& pl = planes_[cn.planeNum];
+        float d = pl.nx * point.x + pl.ny * point.y + pl.nz * point.z - pl.dist;
+        node = d >= 0 ? cn.children[0] : cn.children[1];
+    }
+    return node == kContentsSolid;
 }

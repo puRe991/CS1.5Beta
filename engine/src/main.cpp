@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
                 Vec3f o = parseOrigin(*origin);
                 camera.x = o.x;
                 camera.y = o.y;
-                camera.z = o.z + 64.0f; // eye height above the spawn origin
+                camera.z = o.z; // feet/origin, matching the hull collision test point
             }
             const std::string* angle = ent.get("angle");
             if (angle) camera.yaw = (float)std::atof(angle->c_str());
@@ -138,7 +138,22 @@ int main(int argc, char** argv) {
         if (keys[SDL_SCANCODE_A]) strafe -= 1.0f;
         if (keys[SDL_SCANCODE_SPACE]) up += 1.0f;
         if (keys[SDL_SCANCODE_LCTRL]) up -= 1.0f;
-        camera.move(forward, strafe, up, dt);
+
+        float dx, dy, dz;
+        camera.wishDelta(forward, strafe, up, dt, dx, dy, dz);
+
+        // Resolve each axis independently against the map's player hull so
+        // movement slides along walls instead of stopping dead on contact.
+        Vec3 candidate{camera.x, camera.y, camera.z};
+        candidate.x += dx;
+        if (map.pointInSolid(candidate)) candidate.x = camera.x;
+        candidate.y += dy;
+        if (map.pointInSolid(candidate)) candidate.y = camera.y;
+        candidate.z += dz;
+        if (map.pointInSolid(candidate)) candidate.z = camera.z;
+        camera.x = candidate.x;
+        camera.y = candidate.y;
+        camera.z = candidate.z;
 
         glViewport(0, 0, kWidth, kHeight);
         glClearColor(0.4f, 0.6f, 0.9f, 1.0f);
@@ -146,9 +161,11 @@ int main(int argc, char** argv) {
 
         Mat4 proj = perspective(90.0f, (float)kWidth / kHeight, 4.0f, 8192.0f);
 
+        constexpr float kEyeHeight = 64.0f; // eye offset above the collision origin
+
         float yawRad = camera.yaw * 3.14159265f / 180.0f;
         float pitchRad = camera.pitch * 3.14159265f / 180.0f;
-        Vec3f eye{camera.x, camera.y, camera.z};
+        Vec3f eye{camera.x, camera.y, camera.z + kEyeHeight};
         Vec3f forwardDir{
             std::cos(yawRad) * std::cos(pitchRad),
             std::sin(yawRad) * std::cos(pitchRad),
