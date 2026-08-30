@@ -13,6 +13,7 @@ add_executable(cs15engine
     src/assets/pak.cpp
     src/assets/wad.cpp
     src/assets/bsp.cpp
+    src/assets/mdl.cpp
 )
 
 target_include_directories(cs15engine PRIVATE ${SDL2_INCLUDE_DIRS} src)

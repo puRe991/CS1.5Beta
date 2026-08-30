@@ -24,7 +24,7 @@ Requires SDL2 and OpenGL development headers (`libsdl2-dev` on Debian/Ubuntu).
 ## Running
 
 ```
-./cs15engine <path/to/map.bsp> <path/to/cstrike-dir-with-wads>
+./cs15engine <path/to/map.bsp> <path/to/cstrike-dir-with-wads> [path/to/viewmodel.mdl]
 ```
 
 Controls: WASD to move, mouse to look, Space/Ctrl for up/down, Esc to quit.
@@ -79,7 +79,7 @@ engine/
 - [ ] SPR sprite format support (used for effects, some HUD elements)
 - [ ] MDL animation playback (currently only the static bind pose renders — no walk/run/shoot animation blending, no sequence system)
 - [ ] MDL attachment points (muzzle flash origin, weapon-to-hand attachment, etc.)
-- [ ] View model (first-person weapon model) rendering *in the main engine window* — assets load and render correctly via `modelshot` already, just not wired into `main.cpp` yet
+- [x] View model (first-person weapon model) rendering in the main engine window — own narrow-FOV projection pass + depth clear so it never clips into world geometry (pose/offset is a fixed approximation, not attachment-point accurate — see animation TODO below)
 
 ### Physics & Movement
 - [ ] Proper player movement: gravity, jumping, ducking, ground friction, air control (currently a pure free-fly camera with only collision blocking)

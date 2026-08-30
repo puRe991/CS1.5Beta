@@ -2,15 +2,17 @@
 #include <GL/gl.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #include "camera.h"
 #include "mat4.h"
 #include "assets/bsp.h"
+#include "assets/mdl.h"
 
 namespace {
 
-GLuint uploadTexture(const BspTexture& tex) {
+GLuint uploadTextureRGBA(const uint8_t* rgba, uint32_t width, uint32_t height) {
     GLuint id = 0;
     glGenTextures(1, &id);
     glBindTexture(GL_TEXTURE_2D, id);
@@ -19,8 +21,8 @@ GLuint uploadTexture(const BspTexture& tex) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
-    if (!tex.rgba.empty()) {
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex.width, tex.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex.rgba.data());
+    if (rgba) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
     } else {
         uint8_t pixels[16] = {
             255,0,255,255,  0,0,0,255,
@@ -31,21 +33,55 @@ GLuint uploadTexture(const BspTexture& tex) {
     return id;
 }
 
+GLuint uploadTexture(const BspTexture& tex) {
+    return uploadTextureRGBA(tex.rgba.empty() ? nullptr : tex.rgba.data(), tex.width, tex.height);
+}
+
+GLuint uploadTexture(const MdlTexture& tex) {
+    return uploadTextureRGBA(tex.rgba.empty() ? nullptr : tex.rgba.data(), tex.width, tex.height);
+}
+
 Vec3f parseOrigin(const std::string& s) {
     Vec3f v{0, 0, 0};
     std::sscanf(s.c_str(), "%f %f %f", &v.x, &v.y, &v.z);
     return v;
 }
 
+void drawMdlTriangles(const MdlModel& model, const std::vector<GLuint>& texIds) {
+    GLuint currentTex = (GLuint)-1;
+    glBegin(GL_TRIANGLES);
+    for (const auto& tri : model.triangles()) {
+        GLuint texId = (tri.textureIndex >= 0 && (size_t)tri.textureIndex < texIds.size()) ? texIds[tri.textureIndex] : 0;
+        if (texId != currentTex) {
+            glEnd();
+            glBindTexture(GL_TEXTURE_2D, texId);
+            currentTex = texId;
+            glBegin(GL_TRIANGLES);
+        }
+        float texW = 64, texH = 64;
+        if (tri.textureIndex >= 0 && (size_t)tri.textureIndex < model.textures().size()) {
+            texW = (float)model.textures()[tri.textureIndex].width;
+            texH = (float)model.textures()[tri.textureIndex].height;
+        }
+        for (const MdlVertex* v : {&tri.a, &tri.b, &tri.c}) {
+            glTexCoord2f(v->u / texW, v->v / texH);
+            glVertex3f(v->x, v->y, v->z);
+        }
+    }
+    glEnd();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: %s <map.bsp> <wad_dir>\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <map.bsp> <wad_dir> [viewmodel.mdl] [screenshot_out.bmp]\n", argv[0]);
         return 1;
     }
     std::string mapPath = argv[1];
     std::string wadDir = argv[2];
+    std::string viewModelPath = argc >= 4 ? argv[3] : "";
+    std::string screenshotPath = argc >= 5 ? argv[4] : "";
 
     BspMap map;
     if (!map.load(mapPath, {wadDir})) {
@@ -53,6 +89,17 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::printf("loaded map: %zu faces, %zu textures\n", map.faces().size(), map.textures().size());
+
+    MdlModel viewModel;
+    bool hasViewModel = false;
+    if (!viewModelPath.empty()) {
+        hasViewModel = viewModel.load(viewModelPath);
+        if (!hasViewModel) {
+            std::fprintf(stderr, "failed to load view model: %s (continuing without it)\n", viewModelPath.c_str());
+        } else {
+            std::printf("loaded view model: %zu triangles, %zu textures\n", viewModel.triangles().size(), viewModel.textures().size());
+        }
+    }
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -93,6 +140,12 @@ int main(int argc, char** argv) {
     std::vector<GLuint> texIds;
     texIds.reserve(map.textures().size());
     for (const auto& tex : map.textures()) texIds.push_back(uploadTexture(tex));
+
+    std::vector<GLuint> viewModelTexIds;
+    if (hasViewModel) {
+        viewModelTexIds.reserve(viewModel.textures().size());
+        for (const auto& tex : viewModel.textures()) viewModelTexIds.push_back(uploadTexture(tex));
+    }
 
     Camera camera;
     for (const auto& ent : map.entities()) {
@@ -198,7 +251,45 @@ int main(int argc, char** argv) {
             glEnd();
         }
 
+        if (hasViewModel) {
+            // Classic FPS trick: separate (narrower) projection so the model
+            // isn't fisheye-distorted at close range, and cleared depth so
+            // it never clips into world geometry.
+            glClear(GL_DEPTH_BUFFER_BIT);
+
+            Mat4 viewModelProj = perspective(50.0f, (float)kWidth / kHeight, 1.0f, 512.0f);
+            glMatrixMode(GL_PROJECTION);
+            glLoadMatrixf(viewModelProj.m);
+            glMatrixMode(GL_MODELVIEW);
+
+            Mat4 rotOnly = lookAt(Vec3f{0, 0, 0}, forwardDir, Vec3f{0, 0, 1});
+            glLoadMatrixf(rotOnly.m);
+            glTranslatef(18.0f, -6.0f, -8.0f); // forward, right, down, in view-local (world-axis) units
+            // View models are authored with their barrel along -Y, not along
+            // the world-forward X axis used everywhere else — reorient once.
+            glRotatef(90.0f, 0.0f, 0.0f, 1.0f);
+
+            drawMdlTriangles(viewModel, viewModelTexIds);
+
+            glMatrixMode(GL_PROJECTION);
+            glLoadMatrixf(proj.m);
+            glMatrixMode(GL_MODELVIEW);
+        }
+
         SDL_GL_SwapWindow(window);
+
+        if (!screenshotPath.empty()) {
+            std::vector<uint8_t> pixels(kWidth * kHeight * 3);
+            glReadPixels(0, 0, kWidth, kHeight, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+            std::vector<uint8_t> flipped(kWidth * kHeight * 3);
+            for (int y = 0; y < kHeight; ++y) {
+                std::memcpy(&flipped[y * kWidth * 3], &pixels[(kHeight - 1 - y) * kWidth * 3], kWidth * 3);
+            }
+            SDL_Surface* surf = SDL_CreateRGBSurfaceFrom(flipped.data(), kWidth, kHeight, 24, kWidth * 3, 0x0000FF, 0x00FF00, 0xFF0000, 0);
+            if (surf) SDL_SaveBMP(surf, screenshotPath.c_str());
+            if (surf) SDL_FreeSurface(surf);
+            running = false; // one-shot verification run
+        }
     }
 
     SDL_GL_DeleteContext(glContext);
