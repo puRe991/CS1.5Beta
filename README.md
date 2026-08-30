@@ -1,83 +1,125 @@
-# List of all Counter-Strike Betas 
+# CS1.5Beta — Custom C++/OpenGL Engine
 
-[![](https://c5.patreon.com/external/logo/become_a_patron_button.png)](https://patreon.baseq.fr)
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/P5P27UZHV)
+This branch/fork builds a standalone, open-source engine in C++ and OpenGL
+that reads the original GoldSrc assets (`.bsp` maps, `.wad` textures, `.mdl`
+character models) from the classic Counter-Strike Beta/1.x releases and
+renders them without depending on Half-Life or GoldSrc itself.
 
-This repository contains most of the official releases of Counter-Strike Pre-1.6, for preservation purposes. Installer files have already been extracted without any modification.
+The original repository (see [`Ch0wW/counterstrike-betas`](https://github.com/Ch0wW/counterstrike-betas))
+is a preservation archive of the official CS Beta/Pre-1.6 releases — this
+project reuses those assets as real-world test data for the engine, but does
+not ship or redistribute them.
 
-If possible, Linux binaries are also provided, avoiding the need to redownload files twice, or to search for them. In addition to that, all versions of Counter-Strike contains a `README.md` file providing all the informations you need, such as the recommended release of Half-Life to run these mods, or the changelog if given.
+## Building
 
-Each folder of Counter-Strike has been renamed to properly differenciate them from a community standpoint with the exception of very specific builds of Counter-Strike (CS 1.1b/c, CS 1.0b), or serverside-only fixes (CSBeta 6.6a, 6.6b, 6.8 => `csbeta66`).
+```
+cd engine
+mkdir build && cd build
+cmake ..
+make
+```
 
-# Version branches
+Requires SDL2 and OpenGL development headers (`libsdl2-dev` on Debian/Ubuntu).
 
-# Releases
-All released mod-versions of Counter-Strike work with HL 1.1.1.0 or as a Steam Mod for HL1 (may require modifications)
+## Running
 
-| Version | Release Date | Windows? | Linux? | Repository | Download |
-| -------- | ------- | -------- | -------- | -------- | -------- |
-| CS 1.5 | `June 12, 2002` | ✔ | ✔ | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/cs15_retail) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/cs15_retail.zip) |
-| CS 1.4 | `April 24, 2002` | ✔ | ✔ | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/cs14_retail) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/cs14_retail.zip) |
-| CS 1.3 | `September 12, 2001` | ✔ | ✔ | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/cs13_retail) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/cs13_retail.zip) |
-| CS 1.2 | `June 30, 2001` | ✔ | ✔ | [❌](https://github.com/Ch0wW/counterstrike-betas/tree/cs11_retail) | Engine update only, no change from 1.1 |
-| CS 1.1c | `April 6, 2001` | ✔ | ✔ | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/cs11_retail) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/cs11_retail.zip) |
-| CS 1.1b | `N/C` | ✔ | ✔ | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/cs11_retail) | Already included in CS 1.1 |
-| CS 1.1 | `March 13, 2001` | ✔ | ✔ | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/a98571c1aa4ca3f3a6f42c8848727b34db618bf0) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/a98571c1aa4ca3f3a6f42c8848727b34db618bf0.zip) |
-| CS 1.0b | `January 25, 2001` | ✔ | ❌ | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/cs10_retail) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/cs10_retail.zip) |
-| CS 1.0 | `November 8, 2000` | ✔ | ✔ | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/ab6a359832dac535b4e4f25c7d15e724ea514cc1) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/ab6a359832dac535b4e4f25c7d15e724ea514cc1.zip) |
+```
+./cs15engine <path/to/map.bsp> <path/to/cstrike-dir-with-wads>
+```
 
-# Betas
+Controls: WASD to move, mouse to look, Space/Ctrl for up/down, Esc to quit.
 
-Depending on the beta, it is recommended to use Half-Life 1.1.1.0 (or Steam, with the exception of 6.5 that requires modifications in order for clients to make it run), and Half-Life 1.0.1.6 if you're running Beta 6.2 or below. 
+Two debug/verification tools are also built:
+- `./mapshot <map.bsp> <wad_dir> <out.bmp>` — renders one frame of a map to a file.
+- `./modelshot <model.mdl> <out.bmp>` — renders one frame of a character model to a file.
 
-| Version | Release Date | Windows? | Linux? | Last supported build | Repository | Download |
-| -------- | ------- | ------- | -------- | -------- | -------- | ------- |
-| Beta 7.1 | `September 13, 2000` |  ✔ | ✔ | `HL 1.1.1.0` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta71) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta71.zip) |
-| Beta 7.0 | `August 26, 2000` | ✔ | ✔ | `HL 1.1.1.0` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta70) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta70.zip) |
-| Beta 6.8 | `August 17, 2000` | ❌ | ❌ | `HL 1.1.1.0` | **MISSING** | **MISSING** |
-| Beta 6.7 | `July 23, 2000` | ❌ | ❌ | `HL 1.1.1.0` | **MISSING** | **MISSING** |
-| Beta 6.6 | `June 22, 2000` | ✔ | ✔ | `HL 1.1.1.0` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta66) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta66.zip) |
-| Beta 6.5d | `N/C` | ❌ | ✔ | `HL 1.1.1.0` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta65) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta65.zip) |
-| Beta 6.5 | `June 8, 2000` | ✔ | ✔ | `HL 1.1.1.0` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/0ce5e4e8c1fdbc69fc1720dafa5a5e3ce1eef16d) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/0ce5e4e8c1fdbc69fc1720dafa5a5e3ce1eef16d.zip) |
-| Beta 6.2 | `March 26, 2000` | ❌ | ❌ | `HL 1.0.1.6` | **MISSING** | **MISSING** |
-| Beta 6.1 | `March 24, 2000` | ✔ | ✔ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta61) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta61.zip) |
-| Beta 6.0 | `March 10, 2000` | ✔ | ✔ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta60) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta60.zip) |
-| Beta 5.2 | `January 10, 2000` | ✔ | ✔ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta52) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta52.zip) |
-| Beta 5.0 | `December 23, 1999` | ✔ | ✔ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta50) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta50.zip) |
-| Beta 5.0 (LEAK) | `December 20, 1999` | ✔ | ❌ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta50_leak_20DEC99) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta50_leak_20DEC99.zip) |
-| Beta 4.1 | `December 1, 1999` | ✔ | ❌ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta41) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta41.zip) |
-| Beta 4.0 | `November 5, 1999` | ✔ | ✔ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta40) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta40.zip) |
-| Beta 3.1 | `September 16, 1999` | ✔ | ✔ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta31) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta31.zip) |
-| Beta 3.0 | `September 14, 1999` | ✔ | ❌ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta30) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta30.zip) |
-| Beta 2.1 | `August 17, 1999` | ✔ | ❌ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta21) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta21.zip) |
-| Beta 2.0 | `August 13, 1999` | ✔ | ❌ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta20) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta20.zip) |
-| Beta 1.2 | `July 20, 1999` | ❌ | ❌ | `HL 1.0.1.6` | **MISSING** | **MISSING** |
-| Beta 1.1 | `June 27, 1999` | ✔ | ❌ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta11) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta11.zip) |
-| Beta 1.0 | `June 19, 1999` | ✔ | ❌ | `HL 1.0.1.6` | [Link](https://github.com/Ch0wW/counterstrike-betas/tree/csbeta10) | [**Download**](https://github.com/Ch0wW/counterstrike-betas/archive/refs/heads/csbeta10.zip) |
+## Architecture
 
-# Additional informations
+```
+engine/
+  src/
+    core / main.cpp   # entry point, render loop
+    camera.{h,cpp}     # free-fly camera (Z-up, matches GoldSrc coordinates)
+    mat4.h              # minimal lookAt/perspective matrix math (no GLU/GLM dependency)
+    assets/
+      pak.{h,cpp}        # Quake-style PAK archive reader
+      wad.{h,cpp}        # WAD3 texture package parser (palette-indexed -> RGBA8)
+      bsp.{h,cpp}        # BSP v30 map parser: geometry, textures, entities, hull collision
+      mdl.{h,cpp}        # Studio Model (.mdl v10) parser: bones, textures, skinned mesh
+    tools/
+      mapshot.cpp        # standalone map screenshot tool
+      modelshot.cpp      # standalone model screenshot tool
+```
 
-### Missing CS versions
-The following versions of Counter-Strike are missing from this repository. We do not know if they had a Linux release at one point, if they are missing, or if they are no longer available. If you happen to have any of them, please let me know through an issue file.
-- [ ] Counter-Strike Beta 1.0 (Linux)
-- [ ] Counter-Strike Beta 1.1 (Linux)
-- [ ] Counter-Strike Beta 1.2/1.9 (Windows, Linux)
-- [ ] Counter-Strike Beta 2.0 (Linux)
-- [ ] Counter-Strike Beta 2.1 (Linux)
-- [ ] Counter-Strike Beta 3.0 (Linux)
-- [ ] Counter-Strike Beta 6.2 (Windows, Linux)
-- [ ] Counter-Strike Beta 6.7 (Windows, Linux)
-- [ ] Counter-Strike Beta 6.8 (Windows, Linux)
-- [ ] Counter-Strike Beta 7.1a (Linux)
+## Status: what works today
 
-### Installer Files
-The installer files that were used for Counter-Strike are NOT included in this repository. Only the files that were extracted from said installers.
+- [x] Window, OpenGL context, render loop (SDL2)
+- [x] Free-fly camera: WASD movement, mouse look, vertical movement
+- [x] PAK archive reading (directory + entry extraction)
+- [x] WAD3 texture parsing, palette-indexed decoding to RGBA8, `{`-transparency convention
+- [x] BSP v30 map parsing: entities, faces (surfedges/edges/vertices), texture coordinates
+- [x] Texture resolution from embedded miptex lump *or* external WAD files (worldspawn `wad` key)
+- [x] Map rendering in the main window with real CS textures
+- [x] BSP hull collision (hull 1 / player box) — movement blocked and slid against solid geometry, same method as the original engine (`SV_HullPointContents`)
+- [x] MDL v10 parser: bone hierarchy, bind-pose skeleton, palette-indexed textures, body parts/meshes, triangle strips & fans
+- [x] Character models render correctly (verified against real player models, e.g. `urban.mdl`)
+- All of the above verified against real CS 1.5 release assets (`de_dust2.bsp`, multiple `.wad` files, `urban.mdl`), not just compiled
 
-However, an archive project including them will be provided soon on archive.org.
+## To Do — what's still needed for a full, playable Counter-Strike
 
-### Special Thanks
-- **nirv** for providing the leaked build of CS Beta 5.0 !
+### Rendering
+- [ ] Shader-based (programmable pipeline) renderer — currently uses legacy/fixed-function OpenGL, fine for verification but should move to core/3.3+ with shaders for real use
+- [ ] Lightmaps (BSP lighting lump is parsed as raw data but not yet applied — faces render unlit/texture-only)
+- [ ] BSP visibility (PVS) culling for performance on large maps
+- [ ] Sky rendering (skybox/skydome instead of the current flat clear color)
+- [ ] Decals (bullet holes, blood, etc.)
+- [ ] Particle effects (muzzle flashes, explosions, smoke)
+- [ ] SPR sprite format support (used for effects, some HUD elements)
+- [ ] MDL animation playback (currently only the static bind pose renders — no walk/run/shoot animation blending, no sequence system)
+- [ ] MDL attachment points (muzzle flash origin, weapon-to-hand attachment, etc.)
+- [ ] View model (first-person weapon model) rendering, separate from world model
 
-# Related projects:
-- [Docker image for HLDS 1.1.1.0](https://github.com/Ch0wW/docker-hlds-won2)
-- [Docker image for HLDS 1.0.1.6](https://github.com/Ch0wW/docker-hlds-won2-1016)
+### Physics & Movement
+- [ ] Proper player movement: gravity, jumping, ducking, ground friction, air control (currently a pure free-fly camera with only collision blocking)
+- [ ] Full hull-based collision for other hulls (crouching hull, large hull) — only the standard player hull is implemented
+- [ ] Trace/line-of-sight queries (needed for hitscan weapons, visibility checks)
+- [ ] Entity physics (moving platforms, doors, breakables)
+
+### Gameplay Systems
+- [ ] Entity system (parse and instantiate all entity classes from the BSP entity lump — currently only `info_player_start`/`info_player_deathmatch` are read)
+- [ ] Weapon system: models, firing, damage, recoil, ammo
+- [ ] Player health/armor/death/respawn
+- [ ] Round system: buy time, round win/loss conditions, economy
+- [ ] Bomb defusal mode logic (plant/defuse, `de_` maps)
+- [ ] Hostage rescue mode logic (`cs_` maps)
+- [ ] Team system (T/CT), team-based spawning
+- [ ] HUD (health, ammo, money, timer, radar)
+- [ ] Buy menu
+- [ ] Scoreboard
+
+### Audio
+- [ ] Sound engine (currently no audio playback at all)
+- [ ] WAV loading and 3D positional audio
+- [ ] Weapon/footstep/ambient sound triggers
+
+### Networking
+- [ ] Client-server architecture (currently single-process, no networking)
+- [ ] Server-authoritative simulation, client prediction, lag compensation
+- [ ] Snapshot/delta compression for state sync
+- [ ] Voice chat (stretch goal, original CS Beta didn't have it either)
+
+### Tooling & Engine Infrastructure
+- [ ] Config/cvar system
+- [ ] Console (in-engine developer console)
+- [ ] Input rebinding
+- [ ] Save/load or at least map transition support
+- [ ] Cross-platform packaging (currently only built/tested on Linux)
+- [ ] Automated tests beyond the manual `mapshot`/`modelshot`/`wadtest` verification tools
+
+## Design notes
+
+- Coordinate system: the engine uses GoldSrc's native Z-up convention directly
+  (no conversion layer), so map/model/entity coordinates can be used as-is.
+- Asset parsing favors matching the original binary formats byte-for-byte
+  over reinterpreting them, so real, unmodified CS asset files load without
+  any conversion step.
