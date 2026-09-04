@@ -118,7 +118,7 @@ engine/
 
 ### Main Menu / Meta-game
 - [x] Top nav shell, Store, Inventory, Case-Opening with a fictive-currency economy (`csmenu`)
-- [ ] Wire "PLAY" into actually launching `cs15engine` with a chosen map/mode instead of a placeholder screen
+- [x] "PLAY" lists real maps and launches `cs15engine` (detached process) for the chosen one — no mode/gametype selection yet, just map -> GO
 - [ ] "WATCH" (demos/replays) — no replay system exists yet to watch anything
 - [ ] Loadout screen (equip a specific owned skin per weapon per team, used by the in-game renderer)
 - [ ] Persisting inventory/currency to disk (currently resets every launch)
