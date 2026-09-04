@@ -33,6 +33,16 @@ Two debug/verification tools are also built:
 - `./mapshot <map.bsp> <wad_dir> <out.bmp>` — renders one frame of a map to a file.
 - `./modelshot <model.mdl> <out.bmp>` — renders one frame of a character model to a file.
 
+The main menu is a separate executable for now (see below):
+
+```
+./csmenu <path/to/cstrike/models>
+```
+
+Click PLAY/WATCH/INVENTORY/STORE to switch screens; buy a case in the Store,
+then open it from the Inventory. All currency is fictive — no real payments,
+no Steam integration.
+
 ## Architecture
 
 ```
@@ -41,6 +51,11 @@ engine/
     core / main.cpp   # entry point, render loop
     camera.{h,cpp}     # free-fly camera (Z-up, matches GoldSrc coordinates)
     mat4.h              # minimal lookAt/perspective matrix math (no GLU/GLM dependency)
+    menu_main.cpp        # CS:GO-inspired main menu (Play/Watch/Inventory/Store)
+    inventory.{h,cpp}    # fictive-currency skin/case economy + case-opening RNG
+    ui/
+      ui.{h,cpp}          # minimal immediate-mode 2D UI (rects, buttons, text)
+      font5x7.h            # built-in 5x7 bitmap font (our own, not copied)
     assets/
       pak.{h,cpp}        # Quake-style PAK archive reader
       wad.{h,cpp}        # WAD3 texture package parser (palette-indexed -> RGBA8)
@@ -65,6 +80,8 @@ engine/
 - [x] MDL v10 parser: bone hierarchy, bind-pose skeleton, palette-indexed textures, body parts/meshes, triangle strips & fans
 - [x] Character models render correctly (verified against real player models, e.g. `urban.mdl`)
 - [x] All weapon models load: 87/87 view (`v_*`), world (`w_*`), and pickup (`p_*`) models parse successfully, incl. knives, grenades, C4, shield
+- [x] Weapon view model rendered in the main engine window (own narrow-FOV pass, positioned over the world view)
+- [x] CS:GO-inspired main menu (`csmenu`): top nav bar (Play/Watch/Inventory/Store), built-in bitmap-font UI toolkit (no external font/image libs), functional Store → buy case → Inventory → open case → reveal loop with rarity tiers/odds matching CS:GO's real distribution (79.92% Mil-Spec / 15.98% Restricted / 3.2% Classified / 0.64% Covert / 0.26% Special)
 - All of the above verified against real CS 1.5 release assets (`de_dust2.bsp`, multiple `.wad` files, `urban.mdl`, all 87 weapon models), not just compiled
 
 ## To Do — what's still needed for a full, playable Counter-Strike
@@ -96,9 +113,20 @@ engine/
 - [ ] Hostage rescue mode logic (`cs_` maps)
 - [ ] Team system (T/CT), team-based spawning
 - [ ] HUD (health, ammo, money, timer, radar)
-- [ ] Buy menu
+- [ ] In-round buy menu (distinct from the main-menu Store — this is the classic F-key weapon purchase menu during the buy phase)
 - [ ] Scoreboard
 
+### Main Menu / Meta-game
+- [x] Top nav shell, Store, Inventory, Case-Opening with a fictive-currency economy (`csmenu`)
+- [ ] Wire "PLAY" into actually launching `cs15engine` with a chosen map/mode instead of a placeholder screen
+- [ ] "WATCH" (demos/replays) — no replay system exists yet to watch anything
+- [ ] Loadout screen (equip a specific owned skin per weapon per team, used by the in-game renderer)
+- [ ] Persisting inventory/currency to disk (currently resets every launch)
+- [ ] Trade-up contracts, StatTrak, stickers, graffiti, music kits — not modeled at all yet
+- [ ] Real-money purchase path: **not started, and not a simple follow-up.** Real-money loot boxes are
+      legally regulated as gambling in multiple jurisdictions (e.g. Belgium, the Netherlands), and building
+      it means payment processing, KYC/age verification, and jurisdiction-aware compliance — this needs a
+      deliberate legal/business review before any implementation work, not just an engineering pass.
 ### Audio
 - [ ] Sound engine (currently no audio playback at all)
 - [ ] WAV loading and 3D positional audio

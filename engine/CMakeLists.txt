@@ -42,3 +42,14 @@ add_executable(mdlbatchtest
     src/assets/mdl.cpp
 )
 target_include_directories(mdlbatchtest PRIVATE src)
+
+# CS:GO-inspired main menu: Play/Watch/Inventory/Store, fictive-currency
+# case-opening economy.
+add_executable(csmenu
+    src/menu_main.cpp
+    src/ui/ui.cpp
+    src/inventory.cpp
+    src/assets/mdl.cpp
+)
+target_include_directories(csmenu PRIVATE ${SDL2_INCLUDE_DIRS} src)
+target_link_libraries(csmenu PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
