@@ -147,6 +147,28 @@ engine/
 - [ ] Cross-platform packaging (currently only built/tested on Linux)
 - [ ] Automated tests beyond the manual `mapshot`/`modelshot`/`wadtest` verification tools
 
+## Planned future asset source: CS2/CS:GO-style weapon models
+
+Once the MDL pipeline and gameplay are further along, the plan is to switch
+the weapon view/world models from the original CS 1.5 (GoldSrc) assets to a
+higher-fidelity CS:GO/CS2-style pack:
+[`puRe991/CS2GO-Weapons-Pack-RELEASE`](https://github.com/puRe991/CS2GO-Weapons-Pack-RELEASE).
+
+Not integrated yet — nothing has been pulled in. Notes for when we do:
+- The repo's default branch only holds a `README.md` and `LICENSE`; the actual
+  model/texture files are distributed as GitHub Release downloads, not
+  committed to the tree, so switching means fetching a release archive, not
+  just cloning the repo.
+- Check the model format before assuming our `mdl.cpp` parser can load them
+  as-is: a CS:GO/CS2-era pack may use a newer Source-engine model format
+  (SMD/VTF/newer MDL versions) rather than GoldSrc's Studio Model v10 — likely
+  needs its own loader path, not a drop-in replacement.
+- Licensed CC0 1.0 (public domain dedication) — no redistribution restriction,
+  but still credit the original authors as a courtesy: Stomatolog (model
+  extraction, world model editing for shotguns); x F R 3 N Z Y M 0 V x and
+  Volodya (world model rigging); CrazySlavModder (MIGI addons, inspect
+  animations, model/texture/particle editing).
+
 ## Design notes
 
 - Coordinate system: the engine uses GoldSrc's native Z-up convention directly
