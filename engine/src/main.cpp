@@ -11,6 +11,30 @@
 #include "assets/bsp.h"
 #include "assets/mdl.h"
 #include "ui/ui.h"
+#include "render/glext.h"
+#include "render/shader.h"
+#include "render/world_mesh.h"
+
+namespace {
+const char* kWorldVertexShader = R"(#version 120
+attribute vec3 aPos;
+attribute vec2 aTexCoord;
+varying vec2 vTexCoord;
+uniform mat4 uMVP;
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vTexCoord = aTexCoord;
+}
+)";
+
+const char* kWorldFragmentShader = R"(#version 120
+varying vec2 vTexCoord;
+uniform sampler2D uTexture;
+void main() {
+    gl_FragColor = texture2D(uTexture, vTexCoord);
+}
+)";
+} // namespace
 
 namespace {
 
@@ -139,9 +163,22 @@ int main(int argc, char** argv) {
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_TEXTURE_2D);
 
+    if (!loadGLExtensions()) {
+        std::fprintf(stderr, "failed to load GL shader/VBO extensions\n");
+        return 1;
+    }
+    Shader worldShader;
+    if (!worldShader.load(kWorldVertexShader, kWorldFragmentShader)) {
+        std::fprintf(stderr, "failed to build world shader\n");
+        return 1;
+    }
+
     std::vector<GLuint> texIds;
     texIds.reserve(map.textures().size());
     for (const auto& tex : map.textures()) texIds.push_back(uploadTexture(tex));
+
+    WorldMesh worldMesh;
+    worldMesh.build(map, texIds);
 
     std::vector<GLuint> viewModelTexIds;
     if (hasViewModel) {
@@ -301,24 +338,14 @@ int main(int argc, char** argv) {
         glMatrixMode(GL_MODELVIEW);
         glLoadMatrixf(view.m);
 
-        for (const auto& face : map.faces()) {
-            GLuint texId = (face.textureIndex >= 0 && (size_t)face.textureIndex < texIds.size()) ? texIds[face.textureIndex] : 0;
-            float texW = 64, texH = 64;
-            if (face.textureIndex >= 0 && (size_t)face.textureIndex < map.textures().size()) {
-                texW = (float)map.textures()[face.textureIndex].width;
-                texH = (float)map.textures()[face.textureIndex].height;
-            }
-            glBindTexture(GL_TEXTURE_2D, texId);
-
-            glBegin(GL_POLYGON);
-            for (size_t i = 0; i < face.vertices.size(); ++i) {
-                float u = face.texCoords[i * 2 + 0] / (texW > 0 ? texW : 1);
-                float v = face.texCoords[i * 2 + 1] / (texH > 0 ? texH : 1);
-                glTexCoord2f(u, v);
-                glVertex3f(face.vertices[i].x, face.vertices[i].y, face.vertices[i].z);
-            }
-            glEnd();
-        }
+        // World geometry: shader + VBO pipeline (see render/world_mesh.*).
+        // Model matrix is identity — BSP face vertices are already world space.
+        Mat4 mvp = multiply(proj, view);
+        worldShader.use();
+        worldShader.setMat4("uMVP", mvp);
+        worldShader.setInt("uTexture", 0);
+        worldMesh.draw(worldShader);
+        glUseProgram(0); // back to the fixed-function pipeline for everything below
 
         // Bullet impact marks: small dark points on whatever they hit.
         glDisable(GL_TEXTURE_2D);

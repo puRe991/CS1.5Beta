@@ -36,6 +36,19 @@ inline Mat4 lookAt(Vec3f eye, Vec3f center, Vec3f up) {
     return r;
 }
 
+// Column-major multiply: result transforms a vertex as a * (b * v).
+inline Mat4 multiply(const Mat4& a, const Mat4& b) {
+    Mat4 r;
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; ++k) sum += a.m[k * 4 + row] * b.m[col * 4 + k];
+            r.m[col * 4 + row] = sum;
+        }
+    }
+    return r;
+}
+
 inline Mat4 perspective(float fovYDeg, float aspect, float zNear, float zFar) {
     float f = 1.0f / std::tan(fovYDeg * 3.14159265f / 180.0f / 2.0f);
     Mat4 r;

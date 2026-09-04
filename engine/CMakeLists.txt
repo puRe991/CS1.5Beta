@@ -16,6 +16,9 @@ add_executable(cs15engine
     src/assets/bsp.cpp
     src/assets/mdl.cpp
     src/ui/ui.cpp
+    src/render/glext.cpp
+    src/render/shader.cpp
+    src/render/world_mesh.cpp
 )
 
 target_include_directories(cs15engine PRIVATE ${SDL2_INCLUDE_DIRS} src)
