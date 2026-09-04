@@ -106,7 +106,7 @@ engine/
 - [ ] Entity physics (moving platforms, doors, breakables)
 
 ### Gameplay Systems
-- [ ] Entity system (parse and instantiate all entity classes from the BSP entity lump — currently only `info_player_start`/`info_player_deathmatch` are read)
+- [x] Entity system (`entities.h/.cpp`): all spawn points (CT/T-tagged) instead of just the first found, real bomb-target/buy-zone regions from BSP submodel bounds, live "BOMBSITE"/"BUY ZONE" HUD indicators — verified against de_dust2's real entity counts (40 spawns, 2 bomb targets, 2 buy zones). Other entity classes (func_door, func_button, breakables, triggers, lights) are still just static unparsed geometry/data.
 - [x] Basic hitscan firing: left click, 30-round magazine, R to reload, impact marker at the hit point — no damage/recoil/spread/switching yet, and only one weapon (AK47) is wired in at all
 - [ ] Player health/armor/death/respawn
 - [ ] Round system: buy time, round win/loss conditions, economy
