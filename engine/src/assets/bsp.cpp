@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 
@@ -170,7 +171,15 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     }
 
     hull1HeadNode_ = -1;
-    if (modelData.size() >= sizeof(DModel)) {
+    models_.clear();
+    for (size_t o = 0; o + sizeof(DModel) <= modelData.size(); o += sizeof(DModel)) {
+        const DModel* m = reinterpret_cast<const DModel*>(modelData.data() + o);
+        models_.push_back(BspModelBounds{
+            Vec3{m->mins[0], m->mins[1], m->mins[2]},
+            Vec3{m->maxs[0], m->maxs[1], m->maxs[2]}
+        });
+    }
+    if (!models_.empty()) {
         hull1HeadNode_ = reinterpret_cast<const DModel*>(modelData.data())->headNode[1];
     }
 
@@ -307,6 +316,12 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     (void)numEdges;
     (void)numSurfEdges;
     return true;
+}
+
+int BspMap::modelIndexFor(const BspEntity& ent) {
+    const std::string* model = ent.get("model");
+    if (!model || model->empty() || (*model)[0] != '*') return -1;
+    return std::atoi(model->c_str() + 1);
 }
 
 bool BspMap::pointInSolid(Vec3 point) const {

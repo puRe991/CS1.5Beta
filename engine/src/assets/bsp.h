@@ -28,6 +28,13 @@ struct BspEntity {
     const std::string* get(const std::string& key) const;
 };
 
+// Bounding box of one BSP submodel (world geometry group). Brush entities
+// (func_bomb_target, func_buyzone, func_door, ...) reference one of these by
+// index via their "model" key, formatted as "*N".
+struct BspModelBounds {
+    Vec3 mins, maxs;
+};
+
 // Parsed BSP v30 (GoldSrc) map: geometry + resolved textures + entities.
 class BspMap {
 public:
@@ -38,6 +45,11 @@ public:
     const std::vector<BspFace>& faces() const { return faces_; }
     const std::vector<BspTexture>& textures() const { return textures_; }
     const std::vector<BspEntity>& entities() const { return entities_; }
+    const std::vector<BspModelBounds>& models() const { return models_; }
+
+    // Parses a brush entity's "model" key (e.g. "*16") into an index into
+    // models(). Returns -1 if the entity has no model key or it's malformed.
+    static int modelIndexFor(const BspEntity& ent);
 
     // True if `point` (a player origin) sits inside solid geometry, tested against
     // hull 1 (the standard player-sized box hull), same as the original engine's
@@ -66,6 +78,7 @@ private:
     std::vector<BspEntity> entities_;
     std::vector<Plane> planes_;
     std::vector<ClipNode> clipNodes_;
+    std::vector<BspModelBounds> models_;
     int32_t hull1HeadNode_ = -1;
 
     void parseEntities(const std::string& entityText);

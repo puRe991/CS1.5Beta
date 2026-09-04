@@ -10,6 +10,7 @@ find_package(OpenGL REQUIRED)
 add_executable(cs15engine
     src/main.cpp
     src/camera.cpp
+    src/entities.cpp
     src/assets/pak.cpp
     src/assets/wad.cpp
     src/assets/bsp.cpp

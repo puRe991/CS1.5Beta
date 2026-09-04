@@ -7,6 +7,7 @@
 
 #include "camera.h"
 #include "mat4.h"
+#include "entities.h"
 #include "assets/bsp.h"
 #include "assets/mdl.h"
 #include "ui/ui.h"
@@ -148,20 +149,26 @@ int main(int argc, char** argv) {
         for (const auto& tex : viewModel.textures()) viewModelTexIds.push_back(uploadTexture(tex));
     }
 
+    EntitySystem entities;
+    entities.build(map);
+    std::printf("entities: %zu spawns (CT/T), %zu bomb targets, %zu buy zones\n",
+                entities.spawns.size(), entities.bombTargets.size(), entities.buyZones.size());
+
     Camera camera;
-    for (const auto& ent : map.entities()) {
-        const std::string* classname = ent.get("classname");
-        if (classname && (*classname == "info_player_start" || *classname == "info_player_deathmatch")) {
-            const std::string* origin = ent.get("origin");
-            if (origin) {
-                Vec3f o = parseOrigin(*origin);
-                camera.x = o.x;
-                camera.y = o.y;
-                camera.z = o.z; // feet/origin, matching the hull collision test point
-            }
-            const std::string* angle = ent.get("angle");
-            if (angle) camera.yaw = (float)std::atof(angle->c_str());
-            break;
+    {
+        // Prefer a Counter-Terrorist spawn (matches the historical
+        // info_player_start = CT convention), fall back to any spawn point,
+        // or the map origin if the entity lump had none at all.
+        const SpawnPoint* chosen = nullptr;
+        for (const auto& sp : entities.spawns) {
+            if (sp.team == Team::CT) { chosen = &sp; break; }
+        }
+        if (!chosen && !entities.spawns.empty()) chosen = &entities.spawns[0];
+        if (chosen) {
+            camera.x = chosen->origin.x;
+            camera.y = chosen->origin.y;
+            camera.z = chosen->origin.z; // feet/origin, matching the hull collision test point
+            camera.yaw = chosen->yaw;
         }
     }
 
@@ -358,6 +365,22 @@ int main(int argc, char** argv) {
         char ammoStr[32];
         std::snprintf(ammoStr, sizeof(ammoStr), "%d / %d", ammoInMag, kMagazineSize);
         uiDrawText(kWidth - uiTextWidth(ammoStr, 2.5f) - 24, kHeight - 48, ammoStr, kColorWhite, 2.5f);
+
+        // Zone indicators, driven by the real func_bomb_target/func_buyzone
+        // brush bounds parsed from the map's entity lump.
+        Vec3 feet{camera.x, camera.y, camera.z};
+        bool inBombsite = false, inBuyzone = false;
+        for (const auto& zone : entities.bombTargets) if (pointInZone(zone, feet)) inBombsite = true;
+        for (const auto& zone : entities.buyZones) if (pointInZone(zone, feet)) inBuyzone = true;
+        if (inBombsite) {
+            const char* msg = "BOMBSITE";
+            uiDrawText((kWidth - uiTextWidth(msg, 2.0f)) / 2.0f, 24, msg, Color{1.0f, 0.3f, 0.2f, 1.0f}, 2.0f);
+        }
+        if (inBuyzone) {
+            const char* msg = "BUY ZONE";
+            uiDrawText((kWidth - uiTextWidth(msg, 2.0f)) / 2.0f, 48, msg, Color{0.3f, 0.8f, 1.0f, 1.0f}, 2.0f);
+        }
+
         uiEndFrame();
 
         SDL_GL_SwapWindow(window);
