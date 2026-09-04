@@ -45,6 +45,13 @@ public:
     // clipnode planes are already offset to account for the hull's extents.
     bool pointInSolid(Vec3 point) const;
 
+    // Steps from start toward end (in fixed increments) until it enters solid
+    // geometry or reaches the end. Returns true and sets outHit on a hit.
+    // Deliberately simple (not a proper swept hull trace) — good enough for
+    // bullet impact marks; the player hull's box inflation means it stops
+    // slightly before the true wall face, a known simplification.
+    bool traceLine(Vec3 start, Vec3 end, Vec3& outHit) const;
+
 private:
     struct Plane {
         float nx, ny, nz, dist;

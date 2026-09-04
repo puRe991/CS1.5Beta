@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -320,4 +321,21 @@ bool BspMap::pointInSolid(Vec3 point) const {
         node = d >= 0 ? cn.children[0] : cn.children[1];
     }
     return node == kContentsSolid;
+}
+
+bool BspMap::traceLine(Vec3 start, Vec3 end, Vec3& outHit) const {
+    constexpr float kStep = 4.0f;
+    float dx = end.x - start.x, dy = end.y - start.y, dz = end.z - start.z;
+    float len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 1e-4f) return false;
+    dx /= len; dy /= len; dz /= len;
+
+    for (float t = 0.0f; t <= len; t += kStep) {
+        Vec3 p{start.x + dx * t, start.y + dy * t, start.z + dz * t};
+        if (pointInSolid(p)) {
+            outHit = p;
+            return true;
+        }
+    }
+    return false;
 }

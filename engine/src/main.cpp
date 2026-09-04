@@ -9,6 +9,7 @@
 #include "mat4.h"
 #include "assets/bsp.h"
 #include "assets/mdl.h"
+#include "ui/ui.h"
 
 namespace {
 
@@ -167,6 +168,20 @@ int main(int argc, char** argv) {
     Uint64 lastTicks = SDL_GetPerformanceCounter();
     bool running = true;
 
+    // --- Player physics state ---
+    constexpr float kGravity = 800.0f;   // units/sec^2, Source-ish
+    constexpr float kJumpSpeed = 300.0f; // units/sec, initial upward velocity
+    float velocityZ = 0.0f;
+    bool grounded = false;
+    bool spaceWasDown = false;
+
+    // --- Weapon test state ---
+    constexpr int kMagazineSize = 30;
+    int ammoInMag = kMagazineSize;
+    bool mouseWasDown = false;
+    std::vector<Vec3> impactMarks;
+    constexpr size_t kMaxImpactMarks = 64;
+
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -174,6 +189,8 @@ int main(int argc, char** argv) {
                 running = false;
             } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
                 running = false;
+            } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r) {
+                ammoInMag = kMagazineSize;
             } else if (event.type == SDL_MOUSEMOTION) {
                 camera.look((float)event.motion.xrel, (float)event.motion.yrel);
             }
@@ -184,29 +201,59 @@ int main(int argc, char** argv) {
         lastTicks = nowTicks;
 
         const Uint8* keys = SDL_GetKeyboardState(nullptr);
-        float forward = 0.0f, strafe = 0.0f, up = 0.0f;
+        float forward = 0.0f, strafe = 0.0f;
         if (keys[SDL_SCANCODE_W]) forward += 1.0f;
         if (keys[SDL_SCANCODE_S]) forward -= 1.0f;
         if (keys[SDL_SCANCODE_D]) strafe += 1.0f;
         if (keys[SDL_SCANCODE_A]) strafe -= 1.0f;
-        if (keys[SDL_SCANCODE_SPACE]) up += 1.0f;
-        if (keys[SDL_SCANCODE_LCTRL]) up -= 1.0f;
+        bool spaceDown = keys[SDL_SCANCODE_SPACE];
+        bool jumpPressed = spaceDown && !spaceWasDown;
+        spaceWasDown = spaceDown;
 
-        float dx, dy, dz;
-        camera.wishDelta(forward, strafe, up, dt, dx, dy, dz);
+        float dx, dy, dzUnused;
+        camera.wishDelta(forward, strafe, 0.0f, dt, dx, dy, dzUnused);
 
-        // Resolve each axis independently against the map's player hull so
+        // Resolve X/Y independently against the map's player hull so
         // movement slides along walls instead of stopping dead on contact.
         Vec3 candidate{camera.x, camera.y, camera.z};
         candidate.x += dx;
         if (map.pointInSolid(candidate)) candidate.x = camera.x;
         candidate.y += dy;
         if (map.pointInSolid(candidate)) candidate.y = camera.y;
-        candidate.z += dz;
-        if (map.pointInSolid(candidate)) candidate.z = camera.z;
+
+        // Ground check: probe just below the resolved feet position.
+        Vec3 groundProbe = candidate;
+        groundProbe.z -= 2.0f;
+        grounded = map.pointInSolid(groundProbe);
+
+        if (jumpPressed && grounded) {
+            velocityZ = kJumpSpeed;
+            grounded = false;
+        } else if (grounded && velocityZ <= 0.0f) {
+            velocityZ = 0.0f;
+        } else {
+            velocityZ -= kGravity * dt;
+        }
+
+        candidate.z += velocityZ * dt;
+        if (map.pointInSolid(candidate)) {
+            if (velocityZ < 0.0f) grounded = true;
+            velocityZ = 0.0f;
+            candidate.z = camera.z; // cancel this step's vertical move, snap to prior floor/ceiling
+        }
+
         camera.x = candidate.x;
         camera.y = candidate.y;
         camera.z = candidate.z;
+
+#ifdef CS15_DEBUG_PHYSICS
+        static float debugTimer = 0.0f;
+        debugTimer += dt;
+        if (debugTimer >= 0.5f) {
+            debugTimer = 0.0f;
+            std::fprintf(stderr, "t=%.1f z=%.2f velZ=%.1f grounded=%d\n", (float)SDL_GetTicks() / 1000.0f, camera.z, velocityZ, grounded);
+        }
+#endif
 
         glViewport(0, 0, kWidth, kHeight);
         glClearColor(0.4f, 0.6f, 0.9f, 1.0f);
@@ -226,6 +273,21 @@ int main(int argc, char** argv) {
         };
         Vec3f center{eye.x + forwardDir.x, eye.y + forwardDir.y, eye.z + forwardDir.z};
         Mat4 view = lookAt(eye, center, Vec3f{0, 0, 1});
+
+        // --- Shooting: left click fires a hitscan trace, leaves an impact mark ---
+        bool mouseDown = SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON(SDL_BUTTON_LEFT);
+        if (mouseDown && !mouseWasDown && ammoInMag > 0) {
+            --ammoInMag;
+            Vec3 traceStart{eye.x, eye.y, eye.z};
+            constexpr float kRange = 4096.0f;
+            Vec3 traceEnd{eye.x + forwardDir.x * kRange, eye.y + forwardDir.y * kRange, eye.z + forwardDir.z * kRange};
+            Vec3 hit;
+            if (map.traceLine(traceStart, traceEnd, hit)) {
+                if (impactMarks.size() >= kMaxImpactMarks) impactMarks.erase(impactMarks.begin());
+                impactMarks.push_back(hit);
+            }
+        }
+        mouseWasDown = mouseDown;
 
         glMatrixMode(GL_PROJECTION);
         glLoadMatrixf(proj.m);
@@ -251,6 +313,16 @@ int main(int argc, char** argv) {
             glEnd();
         }
 
+        // Bullet impact marks: small dark points on whatever they hit.
+        glDisable(GL_TEXTURE_2D);
+        glPointSize(6.0f);
+        glColor3f(0.05f, 0.05f, 0.05f);
+        glBegin(GL_POINTS);
+        for (const auto& mark : impactMarks) glVertex3f(mark.x, mark.y, mark.z);
+        glEnd();
+        glColor3f(1.0f, 1.0f, 1.0f);
+        glEnable(GL_TEXTURE_2D);
+
         if (hasViewModel) {
             // Classic FPS trick: separate (narrower) projection so the model
             // isn't fisheye-distorted at close range, and cleared depth so
@@ -275,6 +347,18 @@ int main(int argc, char** argv) {
             glLoadMatrixf(proj.m);
             glMatrixMode(GL_MODELVIEW);
         }
+
+        // --- HUD: crosshair + ammo counter ---
+        int mouseXForHud, mouseYForHud;
+        SDL_GetMouseState(&mouseXForHud, &mouseYForHud);
+        uiBeginFrame(mouseXForHud, mouseYForHud, false, kWidth, kHeight);
+        float cx = kWidth / 2.0f, cy = kHeight / 2.0f;
+        uiDrawRect(cx - 8, cy - 1, 16, 2, kColorWhite);
+        uiDrawRect(cx - 1, cy - 8, 2, 16, kColorWhite);
+        char ammoStr[32];
+        std::snprintf(ammoStr, sizeof(ammoStr), "%d / %d", ammoInMag, kMagazineSize);
+        uiDrawText(kWidth - uiTextWidth(ammoStr, 2.5f) - 24, kHeight - 48, ammoStr, kColorWhite, 2.5f);
+        uiEndFrame();
 
         SDL_GL_SwapWindow(window);
 
