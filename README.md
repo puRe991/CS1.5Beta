@@ -87,7 +87,7 @@ engine/
 ## To Do — what's still needed for a full, playable Counter-Strike
 
 ### Rendering
-- [ ] Shader-based (programmable pipeline) renderer — currently uses legacy/fixed-function OpenGL, fine for verification but should move to core/3.3+ with shaders for real use
+- [x] Shader-based world rendering: GLSL vertex/fragment shader + one VBO for all BSP geometry (`render/`), replacing per-face `glBegin`/`glEnd`. Bullet marks, the view model, and the 2D UI/HUD still use the legacy fixed-function path (GL 2.1 compatibility profile allows mixing both) — converting those is a follow-up, as is eventually moving to a core 3.3+ context
 - [ ] Lightmaps (BSP lighting lump is parsed as raw data but not yet applied — faces render unlit/texture-only)
 - [ ] BSP visibility (PVS) culling for performance on large maps
 - [ ] Sky rendering (skybox/skydome instead of the current flat clear color)
