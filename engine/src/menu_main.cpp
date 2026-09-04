@@ -4,10 +4,16 @@
 // for this pass — see README TODO).
 #include <SDL2/SDL.h>
 #include <GL/gl.h>
+#include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
+#include <dirent.h>
+#include <libgen.h>
 #include <map>
+#include <unistd.h>
 #include <vector>
 
 #include "ui/ui.h"
@@ -90,15 +96,56 @@ std::string upper(std::string s) {
     return s;
 }
 
+std::vector<std::string> listMaps(const std::string& mapsDir) {
+    std::vector<std::string> maps;
+    DIR* dir = opendir(mapsDir.c_str());
+    if (!dir) return maps;
+    while (dirent* entry = readdir(dir)) {
+        std::string name = entry->d_name;
+        if (name.size() > 4 && name.substr(name.size() - 4) == ".bsp") {
+            maps.push_back(name.substr(0, name.size() - 4));
+        }
+    }
+    closedir(dir);
+    std::sort(maps.begin(), maps.end());
+    return maps;
+}
+
+// Directory the csmenu binary itself lives in, so we can find cs15engine
+// sitting right next to it without requiring it on $PATH.
+std::string exeDir(const char* argv0) {
+    std::vector<char> buf(argv0, argv0 + std::strlen(argv0) + 1);
+    return dirname(buf.data());
+}
+
+// Launches cs15engine as a detached child process for the chosen map.
+void launchMap(const std::string& exeDirPath, const std::string& cstrikeDir, const std::string& mapName) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid(); // detach into its own session so it outlives the launching menu
+        std::string enginePath = exeDirPath + "/cs15engine";
+        std::string mapPath = cstrikeDir + "/maps/" + mapName + ".bsp";
+        std::string viewModel = cstrikeDir + "/models/v_ak47.mdl";
+        execl(enginePath.c_str(), enginePath.c_str(), mapPath.c_str(), cstrikeDir.c_str(), viewModel.c_str(), (char*)nullptr);
+        std::fprintf(stderr, "launchMap: execl(%s) failed: %s\n", enginePath.c_str(), std::strerror(errno));
+        std::_Exit(127); // execl only returns on failure
+    }
+    // Parent (the menu) keeps running; the child is left to the OS/init to reap.
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <cstrike_models_dir>\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <cstrike_dir>\n", argv[0]);
         return 1;
     }
     std::srand((unsigned)std::time(nullptr));
-    SkinIconCache icons(argv[1]);
+    std::string cstrikeDir = argv[1];
+    std::string modelsDir = cstrikeDir + "/models";
+    std::string menuExeDir = exeDir(argv[0]);
+    SkinIconCache icons(modelsDir);
+    std::vector<std::string> maps = listMaps(cstrikeDir + "/maps");
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -130,6 +177,7 @@ int main(int argc, char** argv) {
     }
 
     Screen screen = Screen::Inventory;
+    std::string selectedMap = maps.empty() ? "" : maps[0];
     const CaseDef* openingCase = nullptr;
     OwnedSkin revealResult;
     bool revealDone = false;
@@ -141,6 +189,8 @@ int main(int argc, char** argv) {
     std::string screenshotScreen = argc >= 4 ? argv[3] : "";
     if (screenshotScreen == "store") screen = Screen::Store;
     if (screenshotScreen == "inventory") screen = Screen::Inventory;
+    if (screenshotScreen == "play") screen = Screen::Play;
+    if (screenshotScreen == "watch") screen = Screen::Watch;
     if (screenshotScreen == "caseopen_spin" && !cases.empty()) {
         openingCase = &cases[0];
         screen = Screen::CaseOpening;
@@ -200,8 +250,35 @@ int main(int argc, char** argv) {
         uiDrawText(kWidth - balW - 24, 24, balanceStr, Color{0.4f, 1.0f, 0.4f, 1.0f});
 
         // --- Screens ---
-        if (screen == Screen::Play || screen == Screen::Watch) {
-            const char* msg = screen == Screen::Play ? "PLAY - COMING SOON" : "WATCH - COMING SOON";
+        if (screen == Screen::Play) {
+            uiDrawText(24, 84, "PLAY", kColorWhite, 3.0f);
+            uiDrawText(24, 116, "SELECT A MAP, THEN GO - LAUNCHES CS15ENGINE", Color{0.6f, 0.6f, 0.6f, 1.0f}, 1.2f);
+
+            if (maps.empty()) {
+                uiDrawText(24, 160, "NO MAPS FOUND", Color{0.6f, 0.3f, 0.3f, 1.0f}, 1.5f);
+            } else {
+                float mx = 24, my = 150;
+                int col = 0;
+                for (auto& map : maps) {
+                    bool selected = (map == selectedMap);
+                    Color bg = selected ? Color{0.7f, 0.3f, 0.1f, 1.0f} : Color{0.15f, 0.16f, 0.2f, 1.0f};
+                    if (uiButton(mx, my, 220, 36, upper(map), bg)) {
+                        selectedMap = map;
+                    }
+                    ++col;
+                    mx += 232;
+                    if (col >= 5) { col = 0; mx = 24; my += 44; }
+                }
+
+                bool canGo = !selectedMap.empty();
+                Color goColor = canGo ? Color{0.15f, 0.55f, 0.2f, 1.0f} : Color{0.3f, 0.3f, 0.3f, 1.0f};
+                if (uiButton(24, kHeight - 80, 200, 44, "GO", goColor) && canGo) {
+                    launchMap(menuExeDir, cstrikeDir, selectedMap);
+                }
+            }
+
+        } else if (screen == Screen::Watch) {
+            const char* msg = "WATCH - COMING SOON";
             float w = uiTextWidth(msg, 3.0f);
             uiDrawText((kWidth - w) / 2.0f, kHeight / 2.0f - 20, msg, Color{0.5f, 0.5f, 0.55f, 1.0f}, 3.0f);
 
