@@ -99,20 +99,21 @@ engine/
 - [x] View model (first-person weapon model) rendering in the main engine window — own narrow-FOV projection pass + depth clear so it never clips into world geometry (pose/offset is a fixed approximation, not attachment-point accurate — see animation TODO below)
 
 ### Physics & Movement
-- [ ] Proper player movement: gravity, jumping, ducking, ground friction, air control (currently a pure free-fly camera with only collision blocking)
+- [x] Gravity + jump + ground detection (probe-based, snaps back on floor/ceiling contact instead of clipping through) — verified against real de_dust2 geometry with logged position/velocity
+- [ ] Ducking, ground friction/acceleration curves, air control (movement is instant-velocity, not accelerated — no strafe-jumping, no "Source feel" yet)
 - [ ] Full hull-based collision for other hulls (crouching hull, large hull) — only the standard player hull is implemented
-- [ ] Trace/line-of-sight queries (needed for hitscan weapons, visibility checks)
+- [x] Line trace for hitscan (`BspMap::traceLine`) — a stepped-sampling trace, not a proper swept hull trace, so it's slightly less precise than the real engine's; fine for now, worth revisiting
 - [ ] Entity physics (moving platforms, doors, breakables)
 
 ### Gameplay Systems
 - [ ] Entity system (parse and instantiate all entity classes from the BSP entity lump — currently only `info_player_start`/`info_player_deathmatch` are read)
-- [ ] Weapon system: firing, damage, recoil, ammo, switching (models already load — see above)
+- [x] Basic hitscan firing: left click, 30-round magazine, R to reload, impact marker at the hit point — no damage/recoil/spread/switching yet, and only one weapon (AK47) is wired in at all
 - [ ] Player health/armor/death/respawn
 - [ ] Round system: buy time, round win/loss conditions, economy
 - [ ] Bomb defusal mode logic (plant/defuse, `de_` maps)
 - [ ] Hostage rescue mode logic (`cs_` maps)
 - [ ] Team system (T/CT), team-based spawning
-- [ ] HUD (health, ammo, money, timer, radar)
+- [ ] HUD (crosshair + ammo counter exist; health, money, timer, radar don't)
 - [ ] In-round buy menu (distinct from the main-menu Store — this is the classic F-key weapon purchase menu during the buy phase)
 - [ ] Scoreboard
 
