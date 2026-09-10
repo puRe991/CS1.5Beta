@@ -114,7 +114,7 @@ engine/
 - [ ] Hostage rescue mode logic (`cs_` maps)
 - [ ] Team system (T/CT), team-based spawning
 - [ ] HUD (crosshair, ammo, health, round timer exist; money, radar don't)
-- [ ] In-round buy menu (distinct from the main-menu Store — this is the classic F-key weapon purchase menu during the buy phase)
+- [x] In-round buy menu (`weapons.h`): B key, gated to standing in a real func_buyzone + round live, weapon catalog with prices, deducts money and swaps the equipped weapon/ammo. Money system: starts at 800, flat per-round reward (no real win/loss economy tied to it yet). Only affects the primary weapon slot — no pistol/grenade/armor purchases, no per-team price differences yet.
 - [ ] Scoreboard
 
 ### Main Menu / Meta-game
