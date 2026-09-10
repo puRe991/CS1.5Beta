@@ -20,7 +20,13 @@ struct PlayerState {
     int health = kMaxHealth;
     bool alive = true;
     int money = kStartingMoney;
+    Team team = Team::CT;
 };
+
+// Picks a spawn point for `team` (falling back to any spawn, then leaving
+// origin/yaw untouched if the map has none at all). Shared by the initial
+// spawn and every respawn so both use the same team-aware selection.
+void pickSpawnForTeam(const EntitySystem& entities, Team team, Vec3& outOrigin, float& outYaw);
 
 enum class RoundPhase { Live, Intermission };
 

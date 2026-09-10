@@ -206,22 +206,20 @@ int main(int argc, char** argv) {
     std::printf("entities: %zu spawns (CT/T), %zu bomb targets, %zu buy zones\n",
                 entities.spawns.size(), entities.bombTargets.size(), entities.buyZones.size());
 
+    // Player joins CT by default (matches the historical info_player_start =
+    // CT convention). 'N' switches teams at runtime for testing, since
+    // there's no team-select screen or other players to balance against yet.
+    PlayerState player;
+
     Camera camera;
     {
-        // Prefer a Counter-Terrorist spawn (matches the historical
-        // info_player_start = CT convention), fall back to any spawn point,
-        // or the map origin if the entity lump had none at all.
-        const SpawnPoint* chosen = nullptr;
-        for (const auto& sp : entities.spawns) {
-            if (sp.team == Team::CT) { chosen = &sp; break; }
-        }
-        if (!chosen && !entities.spawns.empty()) chosen = &entities.spawns[0];
-        if (chosen) {
-            camera.x = chosen->origin.x;
-            camera.y = chosen->origin.y;
-            camera.z = chosen->origin.z; // feet/origin, matching the hull collision test point
-            camera.yaw = chosen->yaw;
-        }
+        Vec3 origin{0, 0, 0};
+        float yaw = 0.0f;
+        pickSpawnForTeam(entities, player.team, origin, yaw);
+        camera.x = origin.x;
+        camera.y = origin.y;
+        camera.z = origin.z; // feet/origin, matching the hull collision test point
+        camera.yaw = yaw;
     }
 
     Uint64 lastTicks = SDL_GetPerformanceCounter();
@@ -242,9 +240,9 @@ int main(int argc, char** argv) {
     constexpr size_t kMaxImpactMarks = 64;
 
     // --- Health/death/respawn + round loop ---
-    PlayerState player;
     RoundState round;
     bool hWasDown = false; // 'H' is a debug key to test damage/death without needing fall damage
+    bool nWasDown = false; // 'N' is a debug key to test team switching
     std::srand((unsigned)SDL_GetTicks());
 
     // --- Buy menu ---
@@ -288,6 +286,25 @@ int main(int argc, char** argv) {
         bool hDown = keys[SDL_SCANCODE_H];
         if (hDown && !hWasDown) damagePlayer(player, 25); // debug key: test damage/death/respawn
         hWasDown = hDown;
+
+        bool nDown = keys[SDL_SCANCODE_N];
+        if (nDown && !nWasDown) {
+            // Debug key: switch team and teleport to a spawn of the new
+            // team, since there's no team-select UI or other players yet.
+            player.team = (player.team == Team::CT) ? Team::T : Team::CT;
+            Vec3 origin{0, 0, 0};
+            float yaw = 0.0f;
+            pickSpawnForTeam(entities, player.team, origin, yaw);
+            camera.x = origin.x;
+            camera.y = origin.y;
+            camera.z = origin.z;
+            camera.yaw = yaw;
+            camera.pitch = 0.0f;
+            velocityZ = 0.0f;
+            player.health = kMaxHealth;
+            player.alive = true;
+        }
+        nWasDown = nDown;
 
         if (!player.alive || buyMenuOpen) { forward = 0.0f; strafe = 0.0f; }
 
@@ -374,10 +391,11 @@ int main(int argc, char** argv) {
         debugTimer += dt;
         if (debugTimer >= 0.5f) {
             debugTimer = 0.0f;
-            std::fprintf(stderr, "t=%.1f z=%.2f velZ=%.1f grounded=%d hp=%d alive=%d phase=%d round=%d money=%d weapon=%s ammo=%d buyOpen=%d inBuyzone=%d\n",
-                         (float)SDL_GetTicks() / 1000.0f, camera.z, velocityZ, grounded,
+            std::fprintf(stderr, "t=%.1f x=%.1f y=%.1f z=%.2f velZ=%.1f grounded=%d hp=%d alive=%d phase=%d round=%d money=%d weapon=%s ammo=%d buyOpen=%d inBuyzone=%d team=%s\n",
+                         (float)SDL_GetTicks() / 1000.0f, camera.x, camera.y, camera.z, velocityZ, grounded,
                          player.health, player.alive, (int)round.phase, round.roundNumber,
-                         player.money, currentWeaponName.c_str(), ammoInMag, buyMenuOpen, inBuyzone);
+                         player.money, currentWeaponName.c_str(), ammoInMag, buyMenuOpen, inBuyzone,
+                         player.team == Team::CT ? "CT" : "T");
         }
 #endif
 
@@ -511,6 +529,10 @@ int main(int argc, char** argv) {
         char moneyStr[32];
         std::snprintf(moneyStr, sizeof(moneyStr), "$%d", player.money);
         uiDrawText(24, 24, moneyStr, Color{0.4f, 1.0f, 0.4f, 1.0f}, 2.0f);
+
+        const char* teamName = player.team == Team::CT ? "COUNTER-TERRORIST" : "TERRORIST";
+        Color teamColor = player.team == Team::CT ? Color{0.4f, 0.6f, 1.0f, 1.0f} : Color{1.0f, 0.8f, 0.3f, 1.0f};
+        uiDrawText(kWidth / 2.0f - uiTextWidth(teamName, 1.2f) / 2.0f, kHeight - 24, teamName, teamColor, 1.2f);
 
         // --- Buy menu overlay ---
         if (buyMenuOpen) {

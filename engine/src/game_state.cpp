@@ -3,6 +3,23 @@
 #include <algorithm>
 #include <cstdlib>
 
+void pickSpawnForTeam(const EntitySystem& entities, Team team, Vec3& outOrigin, float& outYaw) {
+    std::vector<const SpawnPoint*> teamSpawns;
+    for (const auto& sp : entities.spawns) {
+        if (sp.team == team) teamSpawns.push_back(&sp);
+    }
+    const SpawnPoint* chosen = nullptr;
+    if (!teamSpawns.empty()) {
+        chosen = teamSpawns[std::rand() % teamSpawns.size()];
+    } else if (!entities.spawns.empty()) {
+        chosen = &entities.spawns[std::rand() % entities.spawns.size()];
+    }
+    if (chosen) {
+        outOrigin = chosen->origin;
+        outYaw = chosen->yaw;
+    }
+}
+
 void damagePlayer(PlayerState& player, int amount) {
     if (!player.alive) return;
     player.health -= amount;
@@ -41,21 +58,6 @@ bool updateRound(RoundState& round, PlayerState& player, const EntitySystem& ent
     round.roundNumber += 1;
     round.endReason.clear();
 
-    // Prefer a CT spawn (matches the rest of the engine's spawn choice
-    // convention); fall back to any spawn point.
-    std::vector<const SpawnPoint*> ctSpawns;
-    for (const auto& sp : entities.spawns) {
-        if (sp.team == Team::CT) ctSpawns.push_back(&sp);
-    }
-    const SpawnPoint* chosen = nullptr;
-    if (!ctSpawns.empty()) {
-        chosen = ctSpawns[std::rand() % ctSpawns.size()];
-    } else if (!entities.spawns.empty()) {
-        chosen = &entities.spawns[std::rand() % entities.spawns.size()];
-    }
-    if (chosen) {
-        outRespawnOrigin = chosen->origin;
-        outRespawnYaw = chosen->yaw;
-    }
+    pickSpawnForTeam(entities, player.team, outRespawnOrigin, outRespawnYaw);
     return true;
 }
