@@ -115,7 +115,7 @@ engine/
 - [x] Team assignment (`PlayerState.team`) drives team-based spawn selection for both initial spawn and respawn. No team-select screen, no auto-balance, no other players — 'N' is a debug key to switch team for testing.
 - [ ] HUD (crosshair, ammo, health, round timer exist; money, radar don't)
 - [x] In-round buy menu (`weapons.h`): B key, gated to standing in a real func_buyzone + round live, weapon catalog with prices, deducts money and swaps the equipped weapon/ammo. Money system: starts at 800, flat per-round reward (no real win/loss economy tied to it yet). Only affects the primary weapon slot — no pistol/grenade/armor purchases, no per-team price differences yet.
-- [ ] Scoreboard
+- [x] Scoreboard (hold Tab): real CT/T round-win tally, player's own team/money/health/round number. No player roster or kill count — single-player only, nothing else to list.
 
 ### Main Menu / Meta-game
 - [x] Top nav shell, Store, Inventory, Case-Opening with a fictive-currency economy (`csmenu`)
