@@ -75,6 +75,19 @@ Vec3f parseOrigin(const std::string& s) {
     return v;
 }
 
+void drawTexturedQuad(GLuint tex, float x, float y, float w, float h) {
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glColor4f(1, 1, 1, 1);
+    glBegin(GL_QUADS);
+    glTexCoord2f(0, 0); glVertex2f(x, y);
+    glTexCoord2f(1, 0); glVertex2f(x + w, y);
+    glTexCoord2f(1, 1); glVertex2f(x + w, y + h);
+    glTexCoord2f(0, 1); glVertex2f(x, y + h);
+    glEnd();
+    glDisable(GL_TEXTURE_2D);
+}
+
 void drawMdlTriangles(const MdlModel& model, const std::vector<GLuint>& texIds) {
     GLuint currentTex = (GLuint)-1;
     glBegin(GL_TRIANGLES);
@@ -117,6 +130,23 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::printf("loaded map: %zu faces, %zu textures\n", map.faces().size(), map.textures().size());
+
+    // Radar: the real per-map overview image CS ships (cstrike/overviews/<map>.bmp).
+    // World-space bounds come from our own BSP parse (worldspawn's model bounds),
+    // not from the overview's own zoom/origin metadata — that sidesteps needing to
+    // reverse-engineer the original engine's exact (undocumented) scale constant,
+    // and still self-consistently places the player dot on the real map image.
+    std::string mapBaseName = mapPath;
+    if (size_t slash = mapBaseName.find_last_of("/\\"); slash != std::string::npos) mapBaseName = mapBaseName.substr(slash + 1);
+    if (size_t dot = mapBaseName.find_last_of('.'); dot != std::string::npos) mapBaseName = mapBaseName.substr(0, dot);
+    std::string radarPath = wadDir + "/overviews/" + mapBaseName + ".bmp";
+    SDL_Surface* radarSurfaceRaw = SDL_LoadBMP(radarPath.c_str());
+    bool hasRadar = false;
+    Vec3 worldMins{0, 0, 0}, worldMaxs{0, 0, 0};
+    if (!map.models().empty()) {
+        worldMins = map.models()[0].mins;
+        worldMaxs = map.models()[0].maxs;
+    }
 
     MdlModel viewModel;
     bool hasViewModel = false;
@@ -182,6 +212,19 @@ int main(int argc, char** argv) {
     WorldMesh worldMesh;
     worldMesh.build(map, texIds);
 
+    GLuint radarTexId = 0;
+    if (radarSurfaceRaw) {
+        SDL_Surface* rgba = SDL_ConvertSurfaceFormat(radarSurfaceRaw, SDL_PIXELFORMAT_RGBA32, 0);
+        SDL_FreeSurface(radarSurfaceRaw);
+        if (rgba) {
+            radarTexId = uploadTextureRGBA((const uint8_t*)rgba->pixels, rgba->w, rgba->h);
+            hasRadar = true;
+            SDL_FreeSurface(rgba);
+        }
+    } else {
+        std::printf("no radar overview found at %s (continuing without one)\n", radarPath.c_str());
+    }
+
     std::vector<GLuint> viewModelTexIds;
     if (hasViewModel) {
         viewModelTexIds.reserve(viewModel.textures().size());
@@ -238,6 +281,11 @@ int main(int argc, char** argv) {
     bool mouseWasDown = false;
     std::vector<Vec3> impactMarks;
     constexpr size_t kMaxImpactMarks = 64;
+
+    // --- Damage flash (screen reddens briefly when hurt) ---
+    int lastHealth = kMaxHealth;
+    float damageFlashTimer = 0.0f;
+    constexpr float kDamageFlashDuration = 0.35f;
 
     // --- Health/death/respawn + round loop ---
     RoundState round;
@@ -366,6 +414,10 @@ int main(int argc, char** argv) {
             velocityZ = 0.0f;
             ammoInMag = kMagazineSize;
         }
+
+        if (player.health < lastHealth) damageFlashTimer = kDamageFlashDuration;
+        lastHealth = player.health;
+        if (damageFlashTimer > 0.0f) damageFlashTimer -= dt;
 
         // Zone checks, driven by the real func_bomb_target/func_buyzone
         // brush bounds parsed from the map's entity lump.
@@ -522,12 +574,19 @@ int main(int argc, char** argv) {
         SDL_GetMouseState(&mouseXForHud, &mouseYForHud);
         bool hudMouseDown = buyMenuOpen && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON(SDL_BUTTON_LEFT));
         uiBeginFrame(mouseXForHud, mouseYForHud, hudMouseDown, kWidth, kHeight);
+
+        if (damageFlashTimer > 0.0f) {
+            float alpha = (damageFlashTimer / kDamageFlashDuration) * 0.4f;
+            uiDrawRect(0, 0, kWidth, kHeight, Color{0.8f, 0.0f, 0.0f, alpha});
+        }
+
         float cx = kWidth / 2.0f, cy = kHeight / 2.0f;
         uiDrawRect(cx - 8, cy - 1, 16, 2, kColorWhite);
         uiDrawRect(cx - 1, cy - 8, 2, 16, kColorWhite);
         char ammoStr[32];
         std::snprintf(ammoStr, sizeof(ammoStr), "%d / %d", ammoInMag, kMagazineSize);
         uiDrawText(kWidth - uiTextWidth(ammoStr, 2.5f) - 24, kHeight - 48, ammoStr, kColorWhite, 2.5f);
+        uiDrawText(kWidth - uiTextWidth(currentWeaponName, 1.4f) - 24, kHeight - 76, currentWeaponName, Color{0.7f, 0.7f, 0.7f, 1.0f}, 1.4f);
 
         // Health + round timer.
         char hpStr[32];
@@ -589,6 +648,26 @@ int main(int argc, char** argv) {
         const char* teamName = player.team == Team::CT ? "COUNTER-TERRORIST" : "TERRORIST";
         Color teamColor = player.team == Team::CT ? Color{0.4f, 0.6f, 1.0f, 1.0f} : Color{1.0f, 0.8f, 0.3f, 1.0f};
         uiDrawText(kWidth / 2.0f - uiTextWidth(teamName, 1.2f) / 2.0f, kHeight - 24, teamName, teamColor, 1.2f);
+
+        // --- Radar: real per-map overview image, player dot from our own BSP bounds ---
+        {
+            constexpr float kRadarSize = 200.0f;
+            float rx = kWidth - kRadarSize - 16, ry = 16;
+            uiDrawRect(rx - 2, ry - 2, kRadarSize + 4, kRadarSize + 4, Color{0, 0, 0, 0.6f});
+            if (hasRadar) {
+                drawTexturedQuad(radarTexId, rx, ry, kRadarSize, kRadarSize);
+            } else {
+                uiDrawRect(rx, ry, kRadarSize, kRadarSize, Color{0.15f, 0.15f, 0.15f, 0.8f});
+            }
+
+            float spanX = worldMaxs.x - worldMins.x, spanY = worldMaxs.y - worldMins.y;
+            if (spanX > 1.0f && spanY > 1.0f) {
+                float u = (camera.x - worldMins.x) / spanX;
+                float v = 1.0f - (camera.y - worldMins.y) / spanY; // image Y grows downward
+                float dotX = rx + u * kRadarSize, dotY = ry + v * kRadarSize;
+                uiDrawRect(dotX - 3, dotY - 3, 6, 6, teamColor);
+            }
+        }
 
         // --- Buy menu overlay ---
         if (buyMenuOpen) {
