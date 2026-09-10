@@ -13,6 +13,14 @@ struct BspFace {
     std::vector<Vec3> vertices;   // fan order, world space (Quake coords)
     std::vector<float> texCoords; // 2 per vertex, in texel units (divide by tex size)
     int textureIndex = -1;        // index into BspMap::textures, or -1 if unresolved
+
+    // Lightmap (style 0 only — no animated/switchable light styles yet).
+    // lightmapTexCoords are in luxel space (0..lightmapWidth/Height), 2 per
+    // vertex, matching the vertex/texCoords order. lightmapRGB is empty if
+    // the face has no lightmap data (e.g. a fullbright/sky surface).
+    std::vector<float> lightmapTexCoords;
+    uint32_t lightmapWidth = 0, lightmapHeight = 0;
+    std::vector<uint8_t> lightmapRGB; // lightmapWidth * lightmapHeight * 3
 };
 
 struct BspTexture {

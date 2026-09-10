@@ -12,6 +12,8 @@
 // polygon per face. Requires loadGLExtensions() to have already succeeded.
 class WorldMesh {
 public:
+    // lightmapSampler is the texture unit index (e.g. 1) the shader's
+    // "uLightmap" uniform should be bound to; the base texture stays on unit 0.
     void build(const BspMap& map, const std::vector<GLuint>& texIds);
     void draw(const Shader& shader) const;
     ~WorldMesh();
@@ -24,5 +26,6 @@ private:
     };
 
     GLuint vbo_ = 0;
+    GLuint lightmapAtlas_ = 0;
     std::vector<DrawGroup> groups_;
 };

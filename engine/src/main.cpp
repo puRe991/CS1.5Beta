@@ -21,19 +21,26 @@ namespace {
 const char* kWorldVertexShader = R"(#version 120
 attribute vec3 aPos;
 attribute vec2 aTexCoord;
+attribute vec2 aLightmapCoord;
 varying vec2 vTexCoord;
+varying vec2 vLightmapCoord;
 uniform mat4 uMVP;
 void main() {
     gl_Position = uMVP * vec4(aPos, 1.0);
     vTexCoord = aTexCoord;
+    vLightmapCoord = aLightmapCoord;
 }
 )";
 
 const char* kWorldFragmentShader = R"(#version 120
 varying vec2 vTexCoord;
+varying vec2 vLightmapCoord;
 uniform sampler2D uTexture;
+uniform sampler2D uLightmap;
 void main() {
-    gl_FragColor = texture2D(uTexture, vTexCoord);
+    vec4 base = texture2D(uTexture, vTexCoord);
+    vec3 light = texture2D(uLightmap, vLightmapCoord).rgb;
+    gl_FragColor = vec4(base.rgb * light, base.a);
 }
 )";
 } // namespace
@@ -531,6 +538,7 @@ int main(int argc, char** argv) {
         worldShader.use();
         worldShader.setMat4("uMVP", mvp);
         worldShader.setInt("uTexture", 0);
+        worldShader.setInt("uLightmap", 1);
         worldMesh.draw(worldShader);
         glUseProgram(0); // back to the fixed-function pipeline for everything below
 

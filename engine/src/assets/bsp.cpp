@@ -17,6 +17,7 @@ constexpr int kLumpTextures = 2;
 constexpr int kLumpVertexes = 3;
 constexpr int kLumpTexInfo = 6;
 constexpr int kLumpFaces = 7;
+constexpr int kLumpLighting = 8;
 constexpr int kLumpClipNodes = 9;
 constexpr int kLumpEdges = 12;
 constexpr int kLumpSurfEdges = 13;
@@ -144,7 +145,7 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     }
 
     std::vector<uint8_t> entityData, texData, vertexData, texInfoData, faceData, edgeData, surfEdgeData;
-    std::vector<uint8_t> planeData, clipNodeData, modelData;
+    std::vector<uint8_t> planeData, clipNodeData, modelData, lightData;
     bool ok = readLump(f, header.lumps[kLumpEntities], entityData) &&
               readLump(f, header.lumps[kLumpTextures], texData) &&
               readLump(f, header.lumps[kLumpVertexes], vertexData) &&
@@ -154,7 +155,8 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
               readLump(f, header.lumps[kLumpSurfEdges], surfEdgeData) &&
               readLump(f, header.lumps[kLumpPlanes], planeData) &&
               readLump(f, header.lumps[kLumpClipNodes], clipNodeData) &&
-              readLump(f, header.lumps[kLumpModels], modelData);
+              readLump(f, header.lumps[kLumpModels], modelData) &&
+              readLump(f, header.lumps[kLumpLighting], lightData);
     std::fclose(f);
     if (!ok) return false;
 
@@ -297,6 +299,7 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
         BspFace face;
         face.textureIndex = ti.miptexIndex;
 
+        float lmMinU = 1e30f, lmMinV = 1e30f, lmMaxU = -1e30f, lmMaxV = -1e30f;
         for (int16_t e = 0; e < df.numEdges; ++e) {
             int32_t se = surfEdges[df.firstEdge + e];
             uint16_t vi = se >= 0 ? edges[se].v[0] : edges[-se].v[1];
@@ -308,6 +311,33 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
             float vcoord = v.x * ti.vecs[1][0] + v.y * ti.vecs[1][1] + v.z * ti.vecs[1][2] + ti.vecs[1][3];
             face.texCoords.push_back(u);
             face.texCoords.push_back(vcoord);
+
+            lmMinU = std::min(lmMinU, u); lmMaxU = std::max(lmMaxU, u);
+            lmMinV = std::min(lmMinV, vcoord); lmMaxV = std::max(lmMaxV, vcoord);
+        }
+
+        // Lightmap: GoldSrc bakes one luxel per 16 world units. Luxel-space
+        // texcoords are the same u/v used for the base texture, just
+        // rebased to this face's own min corner and divided by 16.
+        if (!face.texCoords.empty()) {
+            constexpr float kLuxelSize = 16.0f;
+            int lmMinCellU = (int)std::floor(lmMinU / kLuxelSize);
+            int lmMinCellV = (int)std::floor(lmMinV / kLuxelSize);
+            int lmMaxCellU = (int)std::floor(lmMaxU / kLuxelSize);
+            int lmMaxCellV = (int)std::floor(lmMaxV / kLuxelSize);
+            face.lightmapWidth = (uint32_t)(lmMaxCellU - lmMinCellU + 1);
+            face.lightmapHeight = (uint32_t)(lmMaxCellV - lmMinCellV + 1);
+
+            for (size_t i = 0; i < face.texCoords.size(); i += 2) {
+                face.lightmapTexCoords.push_back(face.texCoords[i] / kLuxelSize - lmMinCellU);
+                face.lightmapTexCoords.push_back(face.texCoords[i + 1] / kLuxelSize - lmMinCellV);
+            }
+
+            size_t lightmapBytes = (size_t)face.lightmapWidth * face.lightmapHeight * 3;
+            if (df.lightOfs >= 0 && df.styles[0] != 255 &&
+                (size_t)df.lightOfs + lightmapBytes <= lightData.size()) {
+                face.lightmapRGB.assign(lightData.begin() + df.lightOfs, lightData.begin() + df.lightOfs + lightmapBytes);
+            }
         }
 
         if (face.vertices.size() >= 3) faces_.push_back(std::move(face));
