@@ -108,12 +108,12 @@ engine/
 ### Gameplay Systems
 - [x] Entity system (`entities.h/.cpp`): all spawn points (CT/T-tagged) instead of just the first found, real bomb-target/buy-zone regions from BSP submodel bounds, live "BOMBSITE"/"BUY ZONE" HUD indicators — verified against de_dust2's real entity counts (40 spawns, 2 bomb targets, 2 buy zones). Other entity classes (func_door, func_button, breakables, triggers, lights) are still just static unparsed geometry/data.
 - [x] Basic hitscan firing: left click, 30-round magazine, R to reload, impact marker at the hit point — no damage/recoil/spread/switching yet, and only one weapon (AK47) is wired in at all
-- [ ] Player health/armor/death/respawn
-- [ ] Round system: buy time, round win/loss conditions, economy
+- [x] Player health/death/respawn (`game_state.h/.cpp`): fall damage + a debug damage key, death freezes movement/shooting, auto-respawn at a random spawn point. No armor yet.
+- [x] Round system (partial): Live/Intermission timer loop, round ends on timeout or death, HUD banner + auto-respawn into the next round. No real win conditions (needs opposing entities/AI), no buy-time phase, no economy loop yet — see the in-round buy menu item below.
 - [ ] Bomb defusal mode logic (plant/defuse, `de_` maps)
 - [ ] Hostage rescue mode logic (`cs_` maps)
 - [ ] Team system (T/CT), team-based spawning
-- [ ] HUD (crosshair + ammo counter exist; health, money, timer, radar don't)
+- [ ] HUD (crosshair, ammo, health, round timer exist; money, radar don't)
 - [ ] In-round buy menu (distinct from the main-menu Store — this is the classic F-key weapon purchase menu during the buy phase)
 - [ ] Scoreboard
 
