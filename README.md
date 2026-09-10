@@ -110,7 +110,7 @@ engine/
 - [x] Basic hitscan firing: left click, 30-round magazine, R to reload, impact marker at the hit point — no damage/recoil/spread/switching yet, and only one weapon (AK47) is wired in at all
 - [x] Player health/death/respawn (`game_state.h/.cpp`): fall damage + a debug damage key, death freezes movement/shooting, auto-respawn at a random spawn point. No armor yet.
 - [x] Round system (partial): Live/Intermission timer loop, round ends on timeout or death, HUD banner + auto-respawn into the next round. No real win conditions (needs opposing entities/AI), no buy-time phase, no economy loop yet — see the in-round buy menu item below.
-- [ ] Bomb defusal mode logic (plant/defuse, `de_` maps)
+- [x] Bomb defusal logic (`de_` maps): plant (T, hold E in a real func_bomb_target zone, 3s) and defuse (CT, hold E within 80 units of the bomb, 5s), 35s fuse, real win/loss round-end banners. Single-player only — no bots to plant/defuse against, and the bomb carries no visible world model yet.
 - [ ] Hostage rescue mode logic (`cs_` maps)
 - [x] Team assignment (`PlayerState.team`) drives team-based spawn selection for both initial spawn and respawn. No team-select screen, no auto-balance, no other players — 'N' is a debug key to switch team for testing.
 - [ ] HUD (crosshair, ammo, health, round timer exist; money, radar don't)
