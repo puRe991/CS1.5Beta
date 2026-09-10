@@ -11,6 +11,7 @@ add_executable(cs15engine
     src/main.cpp
     src/camera.cpp
     src/entities.cpp
+    src/game_state.cpp
     src/assets/pak.cpp
     src/assets/wad.cpp
     src/assets/bsp.cpp

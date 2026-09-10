@@ -8,6 +8,7 @@
 #include "camera.h"
 #include "mat4.h"
 #include "entities.h"
+#include "game_state.h"
 #include "assets/bsp.h"
 #include "assets/mdl.h"
 #include "ui/ui.h"
@@ -226,6 +227,12 @@ int main(int argc, char** argv) {
     std::vector<Vec3> impactMarks;
     constexpr size_t kMaxImpactMarks = 64;
 
+    // --- Health/death/respawn + round loop ---
+    PlayerState player;
+    RoundState round;
+    bool hWasDown = false; // 'H' is a debug key to test damage/death without needing fall damage
+    std::srand((unsigned)SDL_GetTicks());
+
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -251,8 +258,14 @@ int main(int argc, char** argv) {
         if (keys[SDL_SCANCODE_D]) strafe += 1.0f;
         if (keys[SDL_SCANCODE_A]) strafe -= 1.0f;
         bool spaceDown = keys[SDL_SCANCODE_SPACE];
-        bool jumpPressed = spaceDown && !spaceWasDown;
+        bool jumpPressed = spaceDown && !spaceWasDown && player.alive;
         spaceWasDown = spaceDown;
+
+        bool hDown = keys[SDL_SCANCODE_H];
+        if (hDown && !hWasDown) damagePlayer(player, 25); // debug key: test damage/death/respawn
+        hWasDown = hDown;
+
+        if (!player.alive) { forward = 0.0f; strafe = 0.0f; }
 
         float dx, dy, dzUnused;
         camera.wishDelta(forward, strafe, 0.0f, dt, dx, dy, dzUnused);
@@ -281,7 +294,18 @@ int main(int argc, char** argv) {
 
         candidate.z += velocityZ * dt;
         if (map.pointInSolid(candidate)) {
-            if (velocityZ < 0.0f) grounded = true;
+            if (velocityZ < 0.0f) {
+                grounded = true;
+                // Fall damage: rough approximation of the classic engines'
+                // formula (only speeds past a threshold hurt, then it scales
+                // with how far past that threshold you were).
+                constexpr float kFallDamageThreshold = 500.0f; // units/sec
+                constexpr float kFallDamageScale = 0.15f;
+                if (-velocityZ > kFallDamageThreshold) {
+                    int dmg = (int)((-velocityZ - kFallDamageThreshold) * kFallDamageScale);
+                    if (dmg > 0) damagePlayer(player, dmg);
+                }
+            }
             velocityZ = 0.0f;
             candidate.z = camera.z; // cancel this step's vertical move, snap to prior floor/ceiling
         }
@@ -290,12 +314,26 @@ int main(int argc, char** argv) {
         camera.y = candidate.y;
         camera.z = candidate.z;
 
+        Vec3 respawnOrigin;
+        float respawnYaw = 0.0f;
+        if (updateRound(round, player, entities, dt, respawnOrigin, respawnYaw)) {
+            camera.x = respawnOrigin.x;
+            camera.y = respawnOrigin.y;
+            camera.z = respawnOrigin.z;
+            camera.yaw = respawnYaw;
+            camera.pitch = 0.0f;
+            velocityZ = 0.0f;
+            ammoInMag = kMagazineSize;
+        }
+
 #ifdef CS15_DEBUG_PHYSICS
         static float debugTimer = 0.0f;
         debugTimer += dt;
         if (debugTimer >= 0.5f) {
             debugTimer = 0.0f;
-            std::fprintf(stderr, "t=%.1f z=%.2f velZ=%.1f grounded=%d\n", (float)SDL_GetTicks() / 1000.0f, camera.z, velocityZ, grounded);
+            std::fprintf(stderr, "t=%.1f z=%.2f velZ=%.1f grounded=%d hp=%d alive=%d phase=%d round=%d\n",
+                         (float)SDL_GetTicks() / 1000.0f, camera.z, velocityZ, grounded,
+                         player.health, player.alive, (int)round.phase, round.roundNumber);
         }
 #endif
 
@@ -320,7 +358,7 @@ int main(int argc, char** argv) {
 
         // --- Shooting: left click fires a hitscan trace, leaves an impact mark ---
         bool mouseDown = SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON(SDL_BUTTON_LEFT);
-        if (mouseDown && !mouseWasDown && ammoInMag > 0) {
+        if (mouseDown && !mouseWasDown && ammoInMag > 0 && player.alive) {
             --ammoInMag;
             Vec3 traceStart{eye.x, eye.y, eye.z};
             constexpr float kRange = 4096.0f;
@@ -392,6 +430,27 @@ int main(int argc, char** argv) {
         char ammoStr[32];
         std::snprintf(ammoStr, sizeof(ammoStr), "%d / %d", ammoInMag, kMagazineSize);
         uiDrawText(kWidth - uiTextWidth(ammoStr, 2.5f) - 24, kHeight - 48, ammoStr, kColorWhite, 2.5f);
+
+        // Health + round timer.
+        char hpStr[32];
+        std::snprintf(hpStr, sizeof(hpStr), "%d HP", player.health);
+        Color hpColor = player.health > 50 ? Color{0.4f, 1.0f, 0.4f, 1.0f} : Color{1.0f, 0.4f, 0.3f, 1.0f};
+        uiDrawText(24, kHeight - 48, hpStr, hpColor, 2.5f);
+
+        int timeLeft = (int)(round.phase == RoundPhase::Live ? round.timeRemaining : 0.0f);
+        char timerStr[16];
+        std::snprintf(timerStr, sizeof(timerStr), "%d:%02d", timeLeft / 60, timeLeft % 60);
+        uiDrawText((kWidth - uiTextWidth(timerStr, 2.5f)) / 2.0f, kHeight - 48, timerStr, kColorWhite, 2.5f);
+
+        if (round.phase == RoundPhase::Intermission) {
+            std::string bigMsg = round.endReason == "DEATH" ? "YOU DIED" : "TIME'S UP";
+            float w = uiTextWidth(bigMsg, 4.0f);
+            uiDrawText((kWidth - w) / 2.0f, kHeight / 2.0f - 60, bigMsg, Color{1.0f, 0.3f, 0.2f, 1.0f}, 4.0f);
+
+            char nextStr[48];
+            std::snprintf(nextStr, sizeof(nextStr), "ROUND %d IN %.0f...", round.roundNumber + 1, round.intermissionRemaining);
+            uiDrawText((kWidth - uiTextWidth(nextStr, 2.0f)) / 2.0f, kHeight / 2.0f, nextStr, kColorWhite, 2.0f);
+        }
 
         // Zone indicators, driven by the real func_bomb_target/func_buyzone
         // brush bounds parsed from the map's entity lump.
