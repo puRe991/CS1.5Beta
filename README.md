@@ -169,6 +169,31 @@ Not integrated yet — nothing has been pulled in. Notes for when we do:
   Volodya (world model rigging); CrazySlavModder (MIGI addons, inspect
   animations, model/texture/particle editing).
 
+### Second candidate source: "CS2 MOD PACK" (GameBanana)
+
+[gamebanana.com/mods/529076](https://gamebanana.com/mods/529076) — a fuller
+CS2-style content pack (2,378 files, ~1GB unpacked ~1.9GB): weapon and player
+sounds, weapon/player models, materials (models/vgui/weapons/decals/HUD),
+overview images, fonts, and a handful of scripts. Plus a small companion
+`font_8a987.zip` (CS:GO-style UI fonts: `cslogo.ttf`, `cstrike.ttf`,
+`csd.ttf`) — that one *is* committed, at
+`external_assets/cs2_mod_pack/font_8a987.zip`.
+
+The main `cs2_mod_pack.zip` is **not** committed to this repo — it was
+downloaded and handed to the user directly instead. Reasons:
+- **License**: CC BY-NC-ND 4.0 (non-commercial, no derivatives, redistribution
+  on other sites requires the author's permission). The user has stated they
+  have that permission for this project, but it's still worth knowing the
+  terms before touching these assets further.
+- **Size**: ~1GB is over GitHub's 100MB hard per-file limit on a plain push.
+  Git LFS was set up as the fix, but this fork has GitHub LFS uploads
+  disabled (`can not upload new objects to public fork`) — not something
+  fixable from here. GitHub Releases (which allow large files without LFS)
+  were also considered, but no release-creation/asset-upload tool was
+  available in this session.
+- If LFS gets enabled for this fork later, or the file should go into a
+  GitHub Release instead, re-download from the URL above and add it then.
+
 ## Design notes
 
 - Coordinate system: the engine uses GoldSrc's native Z-up convention directly
