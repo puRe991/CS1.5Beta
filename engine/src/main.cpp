@@ -412,7 +412,7 @@ int main(int argc, char** argv) {
         if (defusing) {
             round.defuseProgress += dt;
             if (round.defuseProgress >= kDefuseDuration) {
-                endRound(round, "BOMB_DEFUSED");
+                endRound(round, player, "BOMB_DEFUSED");
                 round.defuseProgress = 0.0f;
             }
         } else {
@@ -424,11 +424,12 @@ int main(int argc, char** argv) {
         debugTimer += dt;
         if (debugTimer >= 0.5f) {
             debugTimer = 0.0f;
-            std::fprintf(stderr, "t=%.1f x=%.1f y=%.1f z=%.2f hp=%d alive=%d phase=%d round=%d team=%s inBombsite=%d planted=%d bombT=%.1f plantP=%.1f defP=%.1f endReason=%s\n",
+            std::fprintf(stderr, "t=%.1f x=%.1f y=%.1f z=%.2f hp=%d alive=%d phase=%d round=%d team=%s inBombsite=%d planted=%d bombT=%.1f plantP=%.1f defP=%.1f ctScore=%d tScore=%d endReason=%s\n",
                          (float)SDL_GetTicks() / 1000.0f, camera.x, camera.y, camera.z,
                          player.health, player.alive, (int)round.phase, round.roundNumber,
                          player.team == Team::CT ? "CT" : "T", inBombsite,
                          round.bombPlanted, round.bombTimer, round.plantProgress, round.defuseProgress,
+                         round.ctScore, round.tScore,
                          round.endReason.c_str());
         }
 #endif
@@ -618,6 +619,31 @@ int main(int argc, char** argv) {
             }
 
             uiDrawText(24, by + 12, "ESC TO CLOSE", Color{0.6f, 0.6f, 0.6f, 1.0f}, 1.5f);
+        }
+
+        // --- Scoreboard (hold Tab) ---
+        if (keys[SDL_SCANCODE_TAB]) {
+            float sx = kWidth / 2.0f - 220, sy = 140, sw = 440;
+            uiDrawRect(sx, sy, sw, 200, Color{0, 0, 0, 0.75f});
+            uiDrawText(sx + (sw - uiTextWidth("SCOREBOARD", 2.0f)) / 2.0f, sy + 12, "SCOREBOARD", kColorWhite, 2.0f);
+
+            char ctLine[32];
+            std::snprintf(ctLine, sizeof(ctLine), "COUNTER-TERRORISTS: %d", round.ctScore);
+            uiDrawText(sx + 20, sy + 56, ctLine, Color{0.4f, 0.6f, 1.0f, 1.0f}, 1.6f);
+
+            char tLine[32];
+            std::snprintf(tLine, sizeof(tLine), "TERRORISTS: %d", round.tScore);
+            uiDrawText(sx + 20, sy + 88, tLine, Color{1.0f, 0.8f, 0.3f, 1.0f}, 1.6f);
+
+            uiDrawRect(sx + 20, sy + 128, sw - 40, 1, Color{0.4f, 0.4f, 0.4f, 1.0f});
+
+            char youLine[48];
+            std::snprintf(youLine, sizeof(youLine), "YOU (%s)  $%d  %d HP", player.team == Team::CT ? "CT" : "T", player.money, player.health);
+            uiDrawText(sx + 20, sy + 144, youLine, kColorWhite, 1.4f);
+
+            char roundLine[32];
+            std::snprintf(roundLine, sizeof(roundLine), "ROUND %d", round.roundNumber);
+            uiDrawText(sx + 20, sy + 168, roundLine, Color{0.6f, 0.6f, 0.6f, 1.0f}, 1.4f);
         }
 
         uiEndFrame();

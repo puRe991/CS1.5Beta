@@ -29,10 +29,20 @@ void damagePlayer(PlayerState& player, int amount) {
     }
 }
 
-void endRound(RoundState& round, const std::string& reason) {
+void endRound(RoundState& round, const PlayerState& player, const std::string& reason) {
     round.phase = RoundPhase::Intermission;
     round.intermissionRemaining = kIntermissionDuration;
     round.endReason = reason;
+
+    if (reason == "TIME" || reason == "BOMB_DEFUSED") {
+        round.ctScore += 1;
+    } else if (reason == "BOMB_EXPLODED") {
+        round.tScore += 1;
+    } else if (reason == "DEATH") {
+        // The player was eliminated, so the other side takes the round.
+        if (player.team == Team::CT) round.tScore += 1;
+        else round.ctScore += 1;
+    }
 }
 
 bool updateRound(RoundState& round, PlayerState& player, const EntitySystem& entities,
@@ -46,20 +56,20 @@ bool updateRound(RoundState& round, PlayerState& player, const EntitySystem& ent
             round.bombTimer -= dt;
             if (round.bombTimer <= 0.0f) {
                 round.bombTimer = 0.0f;
-                endRound(round, "BOMB_EXPLODED");
+                endRound(round, player, "BOMB_EXPLODED");
                 return false;
             }
         } else {
             round.timeRemaining -= dt;
             if (round.timeRemaining <= 0.0f) {
                 round.timeRemaining = 0.0f;
-                endRound(round, "TIME");
+                endRound(round, player, "TIME");
                 return false;
             }
         }
 
         if (!player.alive && !round.bombPlanted) {
-            endRound(round, "DEATH");
+            endRound(round, player, "DEATH");
         }
         return false;
     }

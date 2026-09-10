@@ -48,13 +48,19 @@ struct RoundState {
     Vec3 bombPosition{};
     float plantProgress = 0.0f;  // seconds of continuous plant-key hold so far
     float defuseProgress = 0.0f; // seconds of continuous defuse-key hold so far
+
+    int ctScore = 0;
+    int tScore = 0;
 };
 
 // Ends the round immediately with the given reason, starting the
-// intermission/respawn countdown. Exposed so main.cpp's plant/defuse
-// interaction (which owns the input/zone-distance checks) can end a round
-// the same way updateRound() does internally for timeout/death/explosion.
-void endRound(RoundState& round, const std::string& reason);
+// intermission/respawn countdown, and credits the winning side's score
+// (TIME/BOMB_DEFUSED -> CT, BOMB_EXPLODED -> T, DEATH -> whichever team the
+// player *isn't* on, since they were the one eliminated). Exposed so
+// main.cpp's plant/defuse interaction (which owns the input/zone-distance
+// checks) can end a round the same way updateRound() does internally for
+// timeout/death/explosion.
+void endRound(RoundState& round, const PlayerState& player, const std::string& reason);
 
 // Applies damage; if it kills the player, marks them dead (caller is
 // responsible for triggering the round-end/respawn flow on that transition).
