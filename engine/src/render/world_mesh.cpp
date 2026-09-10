@@ -76,6 +76,13 @@ void WorldMesh::build(const BspMap& map, const std::vector<GLuint>& texIds) {
         const BspFace& face = map.faces()[fi];
         if (face.vertices.size() < 3) continue;
 
+        // "sky"-textured faces aren't drawn as geometry at all — they're a
+        // mask over where the skybox (drawn separately) should show through.
+        if (face.textureIndex >= 0 && (size_t)face.textureIndex < map.textures().size() &&
+            map.textures()[face.textureIndex].name == "sky") {
+            continue;
+        }
+
         GLuint texId = 0;
         float texW = 64, texH = 64;
         if (face.textureIndex >= 0 && (size_t)face.textureIndex < texIds.size()) {

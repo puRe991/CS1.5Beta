@@ -36,6 +36,18 @@ inline Mat4 lookAt(Vec3f eye, Vec3f center, Vec3f up) {
     return r;
 }
 
+inline Mat4 translate(Vec3f t) {
+    Mat4 r;
+    r.m[12] = t.x; r.m[13] = t.y; r.m[14] = t.z;
+    return r;
+}
+
+inline Mat4 scale(float s) {
+    Mat4 r;
+    r.m[0] = s; r.m[5] = s; r.m[10] = s;
+    return r;
+}
+
 // Column-major multiply: result transforms a vertex as a * (b * v).
 inline Mat4 multiply(const Mat4& a, const Mat4& b) {
     Mat4 r;

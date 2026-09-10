@@ -16,6 +16,7 @@
 #include "render/glext.h"
 #include "render/shader.h"
 #include "render/world_mesh.h"
+#include "render/skybox.h"
 
 namespace {
 const char* kWorldVertexShader = R"(#version 120
@@ -41,6 +42,25 @@ void main() {
     vec4 base = texture2D(uTexture, vTexCoord);
     vec3 light = texture2D(uLightmap, vLightmapCoord).rgb;
     gl_FragColor = vec4(base.rgb * light, base.a);
+}
+)";
+
+const char* kSkyVertexShader = R"(#version 120
+attribute vec3 aPos;
+attribute vec2 aTexCoord;
+varying vec2 vTexCoord;
+uniform mat4 uMVP;
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+    vTexCoord = aTexCoord;
+}
+)";
+
+const char* kSkyFragmentShader = R"(#version 120
+varying vec2 vTexCoord;
+uniform sampler2D uTexture;
+void main() {
+    gl_FragColor = texture2D(uTexture, vTexCoord);
 }
 )";
 } // namespace
@@ -210,6 +230,25 @@ int main(int argc, char** argv) {
     if (!worldShader.load(kWorldVertexShader, kWorldFragmentShader)) {
         std::fprintf(stderr, "failed to build world shader\n");
         return 1;
+    }
+    Shader skyShader;
+    if (!skyShader.load(kSkyVertexShader, kSkyFragmentShader)) {
+        std::fprintf(stderr, "failed to build sky shader\n");
+        return 1;
+    }
+
+    Skybox skybox;
+    for (const auto& ent : map.entities()) {
+        const std::string* classname = ent.get("classname");
+        if (classname && *classname == "worldspawn") {
+            const std::string* skyname = ent.get("skyname");
+            if (skyname && skybox.load(wadDir, *skyname)) {
+                std::printf("loaded skybox: %s\n", skyname->c_str());
+            } else if (skyname) {
+                std::printf("skybox '%s' not found (continuing without one)\n", skyname->c_str());
+            }
+            break;
+        }
     }
 
     std::vector<GLuint> texIds;
@@ -531,6 +570,21 @@ int main(int argc, char** argv) {
         glLoadMatrixf(proj.m);
         glMatrixMode(GL_MODELVIEW);
         glLoadMatrixf(view.m);
+
+        // Skybox first, depth test off so it can't occlude (or be occluded
+        // out of order by) anything, then re-enabled for the world.
+        if (skybox.valid()) {
+            constexpr float kSkyboxHalfSize = 4000.0f;
+            Mat4 skyModel = multiply(translate(eye), scale(kSkyboxHalfSize));
+            Mat4 skyMvp = multiply(multiply(proj, view), skyModel);
+            glDisable(GL_DEPTH_TEST);
+            skyShader.use();
+            skyShader.setMat4("uMVP", skyMvp);
+            skyShader.setInt("uTexture", 0);
+            skybox.draw(skyShader, eye);
+            glUseProgram(0);
+            glEnable(GL_DEPTH_TEST);
+        }
 
         // World geometry: shader + VBO pipeline (see render/world_mesh.*).
         // Model matrix is identity — BSP face vertices are already world space.
