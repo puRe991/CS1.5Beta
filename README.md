@@ -113,7 +113,7 @@ engine/
 - [x] Bomb defusal logic (`de_` maps): plant (T, hold E in a real func_bomb_target zone, 3s) and defuse (CT, hold E within 80 units of the bomb, 5s), 35s fuse, real win/loss round-end banners. Single-player only — no bots to plant/defuse against, and the bomb carries no visible world model yet.
 - [ ] Hostage rescue mode logic (`cs_` maps)
 - [x] Team assignment (`PlayerState.team`) drives team-based spawn selection for both initial spawn and respawn. No team-select screen, no auto-balance, no other players — 'N' is a debug key to switch team for testing.
-- [ ] HUD (crosshair, ammo, health, round timer exist; money, radar don't)
+- [x] HUD: crosshair, ammo, weapon name, health, round timer, money, team, zone/plant/defuse/bomb indicators, damage flash, and a real per-map radar (loads `cstrike/overviews/<map>.bmp`, player dot from our own BSP world bounds — not the overview file's own undocumented zoom/origin metadata)
 - [x] In-round buy menu (`weapons.h`): B key, gated to standing in a real func_buyzone + round live, weapon catalog with prices, deducts money and swaps the equipped weapon/ammo. Money system: starts at 800, flat per-round reward (no real win/loss economy tied to it yet). Only affects the primary weapon slot — no pistol/grenade/armor purchases, no per-team price differences yet.
 - [x] Scoreboard (hold Tab): real CT/T round-win tally, player's own team/money/health/round number. No player roster or kill count — single-player only, nothing else to list.
 
