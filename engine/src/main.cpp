@@ -9,6 +9,7 @@
 #include "mat4.h"
 #include "entities.h"
 #include "game_state.h"
+#include "weapons.h"
 #include "assets/bsp.h"
 #include "assets/mdl.h"
 #include "ui/ui.h"
@@ -187,6 +188,19 @@ int main(int argc, char** argv) {
         for (const auto& tex : viewModel.textures()) viewModelTexIds.push_back(uploadTexture(tex));
     }
 
+    // Swaps the equipped weapon: reloads the view model and its textures,
+    // freeing the previous ones. Used by the buy menu.
+    auto equipWeapon = [&](const std::string& modelPath) {
+        for (GLuint t : viewModelTexIds) glDeleteTextures(1, &t);
+        viewModelTexIds.clear();
+        hasViewModel = viewModel.load(modelPath);
+        if (hasViewModel) {
+            viewModelTexIds.reserve(viewModel.textures().size());
+            for (const auto& tex : viewModel.textures()) viewModelTexIds.push_back(uploadTexture(tex));
+        }
+        return hasViewModel;
+    };
+
     EntitySystem entities;
     entities.build(map);
     std::printf("entities: %zu spawns (CT/T), %zu bomb targets, %zu buy zones\n",
@@ -233,16 +247,26 @@ int main(int argc, char** argv) {
     bool hWasDown = false; // 'H' is a debug key to test damage/death without needing fall damage
     std::srand((unsigned)SDL_GetTicks());
 
+    // --- Buy menu ---
+    bool buyMenuOpen = false;
+    bool bWasDown = false;
+    std::string currentWeaponName = "AK47";
+
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
                 running = false;
             } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
-                running = false;
+                if (buyMenuOpen) {
+                    buyMenuOpen = false;
+                    SDL_SetRelativeMouseMode(SDL_TRUE);
+                } else {
+                    running = false;
+                }
             } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r) {
                 ammoInMag = kMagazineSize;
-            } else if (event.type == SDL_MOUSEMOTION) {
+            } else if (event.type == SDL_MOUSEMOTION && !buyMenuOpen) {
                 camera.look((float)event.motion.xrel, (float)event.motion.yrel);
             }
         }
@@ -265,7 +289,7 @@ int main(int argc, char** argv) {
         if (hDown && !hWasDown) damagePlayer(player, 25); // debug key: test damage/death/respawn
         hWasDown = hDown;
 
-        if (!player.alive) { forward = 0.0f; strafe = 0.0f; }
+        if (!player.alive || buyMenuOpen) { forward = 0.0f; strafe = 0.0f; }
 
         float dx, dy, dzUnused;
         camera.wishDelta(forward, strafe, 0.0f, dt, dx, dy, dzUnused);
@@ -326,14 +350,34 @@ int main(int argc, char** argv) {
             ammoInMag = kMagazineSize;
         }
 
+        // Zone checks, driven by the real func_bomb_target/func_buyzone
+        // brush bounds parsed from the map's entity lump.
+        Vec3 feet{camera.x, camera.y, camera.z};
+        bool inBombsite = false, inBuyzone = false;
+        for (const auto& zone : entities.bombTargets) if (pointInZone(zone, feet)) inBombsite = true;
+        for (const auto& zone : entities.buyZones) if (pointInZone(zone, feet)) inBuyzone = true;
+
+        bool bDown = keys[SDL_SCANCODE_B];
+        if (bDown && !bWasDown) {
+            if (buyMenuOpen) {
+                buyMenuOpen = false;
+                SDL_SetRelativeMouseMode(SDL_TRUE);
+            } else if (inBuyzone && player.alive && round.phase == RoundPhase::Live) {
+                buyMenuOpen = true;
+                SDL_SetRelativeMouseMode(SDL_FALSE);
+            }
+        }
+        bWasDown = bDown;
+
 #ifdef CS15_DEBUG_PHYSICS
         static float debugTimer = 0.0f;
         debugTimer += dt;
         if (debugTimer >= 0.5f) {
             debugTimer = 0.0f;
-            std::fprintf(stderr, "t=%.1f z=%.2f velZ=%.1f grounded=%d hp=%d alive=%d phase=%d round=%d\n",
+            std::fprintf(stderr, "t=%.1f z=%.2f velZ=%.1f grounded=%d hp=%d alive=%d phase=%d round=%d money=%d weapon=%s ammo=%d buyOpen=%d inBuyzone=%d\n",
                          (float)SDL_GetTicks() / 1000.0f, camera.z, velocityZ, grounded,
-                         player.health, player.alive, (int)round.phase, round.roundNumber);
+                         player.health, player.alive, (int)round.phase, round.roundNumber,
+                         player.money, currentWeaponName.c_str(), ammoInMag, buyMenuOpen, inBuyzone);
         }
 #endif
 
@@ -358,7 +402,7 @@ int main(int argc, char** argv) {
 
         // --- Shooting: left click fires a hitscan trace, leaves an impact mark ---
         bool mouseDown = SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON(SDL_BUTTON_LEFT);
-        if (mouseDown && !mouseWasDown && ammoInMag > 0 && player.alive) {
+        if (mouseDown && !mouseWasDown && ammoInMag > 0 && player.alive && !buyMenuOpen) {
             --ammoInMag;
             Vec3 traceStart{eye.x, eye.y, eye.z};
             constexpr float kRange = 4096.0f;
@@ -423,7 +467,8 @@ int main(int argc, char** argv) {
         // --- HUD: crosshair + ammo counter ---
         int mouseXForHud, mouseYForHud;
         SDL_GetMouseState(&mouseXForHud, &mouseYForHud);
-        uiBeginFrame(mouseXForHud, mouseYForHud, false, kWidth, kHeight);
+        bool hudMouseDown = buyMenuOpen && (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON(SDL_BUTTON_LEFT));
+        uiBeginFrame(mouseXForHud, mouseYForHud, hudMouseDown, kWidth, kHeight);
         float cx = kWidth / 2.0f, cy = kHeight / 2.0f;
         uiDrawRect(cx - 8, cy - 1, 16, 2, kColorWhite);
         uiDrawRect(cx - 1, cy - 8, 2, 16, kColorWhite);
@@ -452,19 +497,50 @@ int main(int argc, char** argv) {
             uiDrawText((kWidth - uiTextWidth(nextStr, 2.0f)) / 2.0f, kHeight / 2.0f, nextStr, kColorWhite, 2.0f);
         }
 
-        // Zone indicators, driven by the real func_bomb_target/func_buyzone
-        // brush bounds parsed from the map's entity lump.
-        Vec3 feet{camera.x, camera.y, camera.z};
-        bool inBombsite = false, inBuyzone = false;
-        for (const auto& zone : entities.bombTargets) if (pointInZone(zone, feet)) inBombsite = true;
-        for (const auto& zone : entities.buyZones) if (pointInZone(zone, feet)) inBuyzone = true;
+        // Zone indicators (zones themselves were already resolved earlier,
+        // before the B-key buy-menu-open check that needs them).
         if (inBombsite) {
             const char* msg = "BOMBSITE";
             uiDrawText((kWidth - uiTextWidth(msg, 2.0f)) / 2.0f, 24, msg, Color{1.0f, 0.3f, 0.2f, 1.0f}, 2.0f);
         }
-        if (inBuyzone) {
-            const char* msg = "BUY ZONE";
+        if (inBuyzone && !buyMenuOpen) {
+            const char* msg = "BUY ZONE - PRESS B TO BUY";
             uiDrawText((kWidth - uiTextWidth(msg, 2.0f)) / 2.0f, 48, msg, Color{0.3f, 0.8f, 1.0f, 1.0f}, 2.0f);
+        }
+
+        char moneyStr[32];
+        std::snprintf(moneyStr, sizeof(moneyStr), "$%d", player.money);
+        uiDrawText(24, 24, moneyStr, Color{0.4f, 1.0f, 0.4f, 1.0f}, 2.0f);
+
+        // --- Buy menu overlay ---
+        if (buyMenuOpen) {
+            uiDrawRect(0, 0, kWidth, kHeight, Color{0, 0, 0, 0.6f});
+            uiDrawText(24, 24, "BUY MENU", kColorWhite, 3.0f);
+            char moneyBig[32];
+            std::snprintf(moneyBig, sizeof(moneyBig), "MONEY: $%d", player.money);
+            uiDrawText(24, 64, moneyBig, Color{0.4f, 1.0f, 0.4f, 1.0f}, 2.0f);
+
+            float by = 120;
+            for (int i = 0; i < kWeaponCatalogCount; ++i) {
+                const WeaponDef& w = kWeaponCatalog[i];
+                bool canAfford = player.money >= w.price;
+                Color bg = canAfford ? Color{0.15f, 0.16f, 0.2f, 1.0f} : Color{0.3f, 0.15f, 0.15f, 1.0f};
+
+                char label[64];
+                std::snprintf(label, sizeof(label), "%-10s $%d", w.name, w.price);
+                if (uiButton(24, by, 300, 36, label, bg) && canAfford) {
+                    player.money -= w.price;
+                    if (equipWeapon(wadDir + "/models/" + w.viewModel)) {
+                        currentWeaponName = w.name;
+                        ammoInMag = w.magazineSize;
+                    }
+                    buyMenuOpen = false;
+                    SDL_SetRelativeMouseMode(SDL_TRUE);
+                }
+                by += 44;
+            }
+
+            uiDrawText(24, by + 12, "ESC TO CLOSE", Color{0.6f, 0.6f, 0.6f, 1.0f}, 1.5f);
         }
 
         uiEndFrame();

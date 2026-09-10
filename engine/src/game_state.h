@@ -3,6 +3,7 @@
 #include <string>
 
 #include "entities.h"
+#include "weapons.h"
 
 // First real gameplay loop: player health/death/respawn and a round timer.
 // Deliberately scoped for single-player testing (no bots/opponents yet):
@@ -18,6 +19,7 @@ constexpr float kIntermissionDuration = 5.0f;  // seconds between rounds
 struct PlayerState {
     int health = kMaxHealth;
     bool alive = true;
+    int money = kStartingMoney;
 };
 
 enum class RoundPhase { Live, Intermission };

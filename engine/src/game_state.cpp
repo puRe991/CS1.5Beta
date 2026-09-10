@@ -1,5 +1,6 @@
 #include "game_state.h"
 
+#include <algorithm>
 #include <cstdlib>
 
 void damagePlayer(PlayerState& player, int amount) {
@@ -34,6 +35,7 @@ bool updateRound(RoundState& round, PlayerState& player, const EntitySystem& ent
 
     player.health = kMaxHealth;
     player.alive = true;
+    player.money = std::min(kMaxMoney, player.money + kRoundMoneyReward);
     round.phase = RoundPhase::Live;
     round.timeRemaining = kRoundDuration;
     round.roundNumber += 1;
