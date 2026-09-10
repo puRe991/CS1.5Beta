@@ -112,7 +112,7 @@ engine/
 - [x] Round system (partial): Live/Intermission timer loop, round ends on timeout or death, HUD banner + auto-respawn into the next round. No real win conditions (needs opposing entities/AI), no buy-time phase, no economy loop yet — see the in-round buy menu item below.
 - [ ] Bomb defusal mode logic (plant/defuse, `de_` maps)
 - [ ] Hostage rescue mode logic (`cs_` maps)
-- [ ] Team system (T/CT), team-based spawning
+- [x] Team assignment (`PlayerState.team`) drives team-based spawn selection for both initial spawn and respawn. No team-select screen, no auto-balance, no other players — 'N' is a debug key to switch team for testing.
 - [ ] HUD (crosshair, ammo, health, round timer exist; money, radar don't)
 - [x] In-round buy menu (`weapons.h`): B key, gated to standing in a real func_buyzone + round live, weapon catalog with prices, deducts money and swaps the equipped weapon/ammo. Money system: starts at 800, flat per-round reward (no real win/loss economy tied to it yet). Only affects the primary weapon slot — no pistol/grenade/armor purchases, no per-team price differences yet.
 - [ ] Scoreboard
