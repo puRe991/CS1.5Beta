@@ -90,7 +90,7 @@ engine/
 - [x] Shader-based world rendering: GLSL vertex/fragment shader + one VBO for all BSP geometry (`render/`), replacing per-face `glBegin`/`glEnd`. Bullet marks, the view model, and the 2D UI/HUD still use the legacy fixed-function path (GL 2.1 compatibility profile allows mixing both) — converting those is a follow-up, as is eventually moving to a core 3.3+ context
 - [x] Lightmaps: BSP lighting lump baked into a shared 2048x2048 atlas, multiplied into the base texture in the world shader. Style 0 only — no animated/switchable light styles yet, and no fullbright/runtime relighting.
 - [ ] BSP visibility (PVS) culling for performance on large maps
-- [ ] Sky rendering (skybox/skydome instead of the current flat clear color)
+- [x] Sky rendering: real 6-face GoldSrc skybox (`assets/tga.*` + `render/skybox.*`), loaded from the worldspawn `skyname` key, drawn camera-centered with depth test off. "sky"-textured faces are excluded from normal geometry so the skybox shows through.
 - [ ] Decals (bullet holes, blood, etc.)
 - [ ] Particle effects (muzzle flashes, explosions, smoke)
 - [ ] SPR sprite format support (used for effects, some HUD elements)
