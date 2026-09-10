@@ -15,6 +15,10 @@
 constexpr int kMaxHealth = 100;
 constexpr float kRoundDuration = 115.0f;       // seconds, ~classic CS round length
 constexpr float kIntermissionDuration = 5.0f;  // seconds between rounds
+constexpr float kBombTimerDuration = 35.0f;    // seconds from plant to detonation
+constexpr float kPlantDuration = 3.0f;         // seconds holding E in a bomb zone to plant
+constexpr float kDefuseDuration = 5.0f;        // seconds holding E near the bomb to defuse
+constexpr float kDefuseRadius = 80.0f;         // units — must be this close to the bomb to defuse
 
 struct PlayerState {
     int health = kMaxHealth;
@@ -35,8 +39,22 @@ struct RoundState {
     float timeRemaining = kRoundDuration;
     float intermissionRemaining = 0.0f;
     int roundNumber = 1;
-    std::string endReason; // "TIME" or "DEATH", set when phase == Intermission
+    // "TIME" (CT win), "DEATH", "BOMB_EXPLODED" (T win), "BOMB_DEFUSED" (CT
+    // win) — set when phase == Intermission.
+    std::string endReason;
+
+    bool bombPlanted = false;
+    float bombTimer = 0.0f;   // counts down from kBombTimerDuration once planted
+    Vec3 bombPosition{};
+    float plantProgress = 0.0f;  // seconds of continuous plant-key hold so far
+    float defuseProgress = 0.0f; // seconds of continuous defuse-key hold so far
 };
+
+// Ends the round immediately with the given reason, starting the
+// intermission/respawn countdown. Exposed so main.cpp's plant/defuse
+// interaction (which owns the input/zone-distance checks) can end a round
+// the same way updateRound() does internally for timeout/death/explosion.
+void endRound(RoundState& round, const std::string& reason);
 
 // Applies damage; if it kills the player, marks them dead (caller is
 // responsible for triggering the round-end/respawn flow on that transition).

@@ -29,19 +29,37 @@ void damagePlayer(PlayerState& player, int amount) {
     }
 }
 
+void endRound(RoundState& round, const std::string& reason) {
+    round.phase = RoundPhase::Intermission;
+    round.intermissionRemaining = kIntermissionDuration;
+    round.endReason = reason;
+}
+
 bool updateRound(RoundState& round, PlayerState& player, const EntitySystem& entities,
                   float dt, Vec3& outRespawnOrigin, float& outRespawnYaw) {
     if (round.phase == RoundPhase::Live) {
-        round.timeRemaining -= dt;
-        if (!player.alive) {
-            round.phase = RoundPhase::Intermission;
-            round.intermissionRemaining = kIntermissionDuration;
-            round.endReason = "DEATH";
-        } else if (round.timeRemaining <= 0.0f) {
-            round.timeRemaining = 0.0f;
-            round.phase = RoundPhase::Intermission;
-            round.intermissionRemaining = kIntermissionDuration;
-            round.endReason = "TIME";
+        if (round.bombPlanted) {
+            // Once planted, the bomb clock is the real win condition — a
+            // dead player (nobody left to defuse) just lets it run out,
+            // no special-casing needed for that beyond skipping the
+            // death-ends-round check below.
+            round.bombTimer -= dt;
+            if (round.bombTimer <= 0.0f) {
+                round.bombTimer = 0.0f;
+                endRound(round, "BOMB_EXPLODED");
+                return false;
+            }
+        } else {
+            round.timeRemaining -= dt;
+            if (round.timeRemaining <= 0.0f) {
+                round.timeRemaining = 0.0f;
+                endRound(round, "TIME");
+                return false;
+            }
+        }
+
+        if (!player.alive && !round.bombPlanted) {
+            endRound(round, "DEATH");
         }
         return false;
     }
@@ -57,6 +75,10 @@ bool updateRound(RoundState& round, PlayerState& player, const EntitySystem& ent
     round.timeRemaining = kRoundDuration;
     round.roundNumber += 1;
     round.endReason.clear();
+    round.bombPlanted = false;
+    round.bombTimer = 0.0f;
+    round.plantProgress = 0.0f;
+    round.defuseProgress = 0.0f;
 
     pickSpawnForTeam(entities, player.team, outRespawnOrigin, outRespawnYaw);
     return true;

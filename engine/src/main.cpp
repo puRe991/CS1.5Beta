@@ -386,16 +386,50 @@ int main(int argc, char** argv) {
         }
         bWasDown = bDown;
 
+        // Plant/defuse: hold E. Progress resets the instant you let go, move
+        // out of range, or aren't on the right team — no partial carry-over.
+        bool eHeld = keys[SDL_SCANCODE_E] && player.alive && round.phase == RoundPhase::Live && !buyMenuOpen;
+
+        bool planting = eHeld && player.team == Team::T && !round.bombPlanted && inBombsite;
+        if (planting) {
+            round.plantProgress += dt;
+            if (round.plantProgress >= kPlantDuration) {
+                round.bombPlanted = true;
+                round.bombTimer = kBombTimerDuration;
+                round.bombPosition = feet;
+                round.plantProgress = 0.0f;
+            }
+        } else {
+            round.plantProgress = 0.0f;
+        }
+
+        float bombDist = round.bombPlanted
+            ? std::sqrt((feet.x - round.bombPosition.x) * (feet.x - round.bombPosition.x) +
+                        (feet.y - round.bombPosition.y) * (feet.y - round.bombPosition.y) +
+                        (feet.z - round.bombPosition.z) * (feet.z - round.bombPosition.z))
+            : 1e9f;
+        bool defusing = eHeld && player.team == Team::CT && round.bombPlanted && bombDist <= kDefuseRadius;
+        if (defusing) {
+            round.defuseProgress += dt;
+            if (round.defuseProgress >= kDefuseDuration) {
+                endRound(round, "BOMB_DEFUSED");
+                round.defuseProgress = 0.0f;
+            }
+        } else {
+            round.defuseProgress = 0.0f;
+        }
+
 #ifdef CS15_DEBUG_PHYSICS
         static float debugTimer = 0.0f;
         debugTimer += dt;
         if (debugTimer >= 0.5f) {
             debugTimer = 0.0f;
-            std::fprintf(stderr, "t=%.1f x=%.1f y=%.1f z=%.2f velZ=%.1f grounded=%d hp=%d alive=%d phase=%d round=%d money=%d weapon=%s ammo=%d buyOpen=%d inBuyzone=%d team=%s\n",
-                         (float)SDL_GetTicks() / 1000.0f, camera.x, camera.y, camera.z, velocityZ, grounded,
+            std::fprintf(stderr, "t=%.1f x=%.1f y=%.1f z=%.2f hp=%d alive=%d phase=%d round=%d team=%s inBombsite=%d planted=%d bombT=%.1f plantP=%.1f defP=%.1f endReason=%s\n",
+                         (float)SDL_GetTicks() / 1000.0f, camera.x, camera.y, camera.z,
                          player.health, player.alive, (int)round.phase, round.roundNumber,
-                         player.money, currentWeaponName.c_str(), ammoInMag, buyMenuOpen, inBuyzone,
-                         player.team == Team::CT ? "CT" : "T");
+                         player.team == Team::CT ? "CT" : "T", inBombsite,
+                         round.bombPlanted, round.bombTimer, round.plantProgress, round.defuseProgress,
+                         round.endReason.c_str());
         }
 #endif
 
@@ -506,9 +540,14 @@ int main(int argc, char** argv) {
         uiDrawText((kWidth - uiTextWidth(timerStr, 2.5f)) / 2.0f, kHeight - 48, timerStr, kColorWhite, 2.5f);
 
         if (round.phase == RoundPhase::Intermission) {
-            std::string bigMsg = round.endReason == "DEATH" ? "YOU DIED" : "TIME'S UP";
-            float w = uiTextWidth(bigMsg, 4.0f);
-            uiDrawText((kWidth - w) / 2.0f, kHeight / 2.0f - 60, bigMsg, Color{1.0f, 0.3f, 0.2f, 1.0f}, 4.0f);
+            std::string bigMsg = "ROUND OVER";
+            Color bigColor = Color{1.0f, 0.3f, 0.2f, 1.0f};
+            if (round.endReason == "DEATH") { bigMsg = "YOU DIED"; }
+            else if (round.endReason == "TIME") { bigMsg = "CT WIN - TIME"; bigColor = Color{0.4f, 0.6f, 1.0f, 1.0f}; }
+            else if (round.endReason == "BOMB_EXPLODED") { bigMsg = "T WIN - BOMB DETONATED"; bigColor = Color{1.0f, 0.8f, 0.3f, 1.0f}; }
+            else if (round.endReason == "BOMB_DEFUSED") { bigMsg = "CT WIN - BOMB DEFUSED"; bigColor = Color{0.4f, 0.6f, 1.0f, 1.0f}; }
+            float w = uiTextWidth(bigMsg, 3.0f);
+            uiDrawText((kWidth - w) / 2.0f, kHeight / 2.0f - 60, bigMsg, bigColor, 3.0f);
 
             char nextStr[48];
             std::snprintf(nextStr, sizeof(nextStr), "ROUND %d IN %.0f...", round.roundNumber + 1, round.intermissionRemaining);
@@ -517,13 +556,29 @@ int main(int argc, char** argv) {
 
         // Zone indicators (zones themselves were already resolved earlier,
         // before the B-key buy-menu-open check that needs them).
-        if (inBombsite) {
-            const char* msg = "BOMBSITE";
+        if (inBombsite && !round.bombPlanted) {
+            const char* msg = player.team == Team::T ? "BOMBSITE - HOLD E TO PLANT" : "BOMBSITE";
             uiDrawText((kWidth - uiTextWidth(msg, 2.0f)) / 2.0f, 24, msg, Color{1.0f, 0.3f, 0.2f, 1.0f}, 2.0f);
         }
         if (inBuyzone && !buyMenuOpen) {
             const char* msg = "BUY ZONE - PRESS B TO BUY";
             uiDrawText((kWidth - uiTextWidth(msg, 2.0f)) / 2.0f, 48, msg, Color{0.3f, 0.8f, 1.0f, 1.0f}, 2.0f);
+        }
+
+        if (round.plantProgress > 0.0f) {
+            char msg[32];
+            std::snprintf(msg, sizeof(msg), "PLANTING... %d%%", (int)(round.plantProgress / kPlantDuration * 100));
+            uiDrawText((kWidth - uiTextWidth(msg, 2.0f)) / 2.0f, 72, msg, Color{1.0f, 0.6f, 0.2f, 1.0f}, 2.0f);
+        }
+        if (round.defuseProgress > 0.0f) {
+            char msg[32];
+            std::snprintf(msg, sizeof(msg), "DEFUSING... %d%%", (int)(round.defuseProgress / kDefuseDuration * 100));
+            uiDrawText((kWidth - uiTextWidth(msg, 2.0f)) / 2.0f, 72, msg, Color{0.3f, 0.8f, 1.0f, 1.0f}, 2.0f);
+        }
+        if (round.bombPlanted && round.phase == RoundPhase::Live) {
+            char msg[32];
+            std::snprintf(msg, sizeof(msg), "BOMB: %.0fs", round.bombTimer);
+            uiDrawText((kWidth - uiTextWidth(msg, 2.5f)) / 2.0f, 96, msg, Color{1.0f, 0.2f, 0.2f, 1.0f}, 2.5f);
         }
 
         char moneyStr[32];
