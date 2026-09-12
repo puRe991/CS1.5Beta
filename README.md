@@ -147,6 +147,108 @@ engine/
 - [ ] Cross-platform packaging (currently only built/tested on Linux)
 - [ ] Automated tests beyond the manual `mapshot`/`modelshot`/`wadtest` verification tools
 
+## Gap analysis: full competitive 5v5 tactical-FPS design vs. this engine
+
+A full game design spec (competitive 5v5 tactical FPS with its own identity —
+own maps/weapons/sounds/UI/progression, not CS assets) was compared against
+everything above. Most of it is genuinely new scope, not just a rewording of
+existing TODO items, so it's broken out here by system rather than merged in.
+Nothing in this section is started; a few rows note where a *very* partial,
+single-player-only foundation already exists elsewhere in this README.
+
+### Game modes
+- [ ] Competitive (ranked 5v5, round-based, side swap, overtime)
+- [ ] Casual (relaxed ruleset)
+- [ ] Deathmatch (free-for-all, respawn-on-death)
+- [ ] Team Deathmatch
+- [ ] Wingman (2v2, small maps)
+- [ ] Arms Race / gun-progression mode
+- [ ] Training/practice mode (aim/recoil/grenade drills, infinite money/ammo, target dummies)
+- [ ] Custom lobbies with user-defined rulesets
+- [ ] A mode/gametype selector at all — today `csmenu`'s PLAY only picks a map and always launches the same single-player round loop
+
+### Weapon system depth
+- [ ] Data-driven weapon definitions (external data, not hardcoded values) covering: price, damage, fire rate, magazine/reserve ammo, reload time, move-speed penalty, accuracy/spread curves (stand/crouch/move/jump), recoil pattern + recovery, armor penetration, damage falloff by range, headshot multiplier, draw/holster time
+- [ ] Named per-body-part hitboxes (head, chest, stomach, arms, legs) with independent damage multipliers — currently hitscan does undifferentiated flat damage to one PlayerState, no hitbox geometry at all
+- [ ] Learnable, non-random-feeling recoil patterns (deterministic vertical+horizontal pattern + bounded randomness + recovery-over-time), first-shot accuracy, moving/jumping/crouching accuracy modifiers
+- [ ] Armor/helmet damage reduction model
+- [ ] Bullet penetration through thin materials ("wallbang")
+- [ ] Full weapon roster across categories (pistols/SMGs/shotguns/rifles/snipers/heavy/melee) — only one rifle (AK47) is wired into gameplay today, even though all 87 view/world/pickup models already load
+- [ ] Server-side hit validation (moot until there's a client/server split at all — see Networking)
+
+### Grenades & thrown utility
+- [ ] Actual throwable/thrown-projectile grenades (arc trajectory, bounce, fuse) — today's "grenades" are just visual particle effects (explosion/smoke sprites) triggered directly by game logic, not physical thrown objects
+- [ ] HE grenade (explosive damage falloff by distance)
+- [ ] Smoke grenade (dynamic volume that blocks vision, expands/dissipates over time, interacts with geometry/lighting)
+- [ ] Flashbang (blind/deafen effect scaled by distance, view angle, and line-of-sight/cover)
+- [ ] Incendiary/molotov (timed area-denial fire zone with damage-over-time)
+
+### Physics & world interaction
+- [ ] Interactive doors, buttons, moving platforms (`func_door`/`func_button`/etc. currently parse as static, unparsed geometry — see the Physics & Movement TODO above)
+- [ ] Breakable/destructible props (glass, crates) where the map allows it
+- [ ] Thrown/dropped physical objects (grenades before they're picked up as projectiles, a dropped bomb model, dropped weapons) — physics objects in general, beyond the player's own hull collision
+
+### Audio
+- [ ] (Everything already listed above under Audio, plus:) material-based footstep sounds (concrete/metal/wood/dirt/grass/stone/water), scaled by movement speed/crouch/distance
+- [ ] Spatial/3D positional audio as a hard requirement for competitive info-gathering (footsteps, reloads, defuse ticks), not just ambience
+- [ ] Voice chat: team/party/lobby channels, push-to-talk vs. open mic, per-player mute, muted-after-death-in-some-modes rule
+
+### Bots & AI
+- [ ] Any bot/AI opponent at all — the engine is single-player-vs-nothing today; every round system (plant/defuse/elimination) has no opposing side to actually contest it
+- [ ] Bot difficulty tiers (Beginner → Expert)
+- [ ] Bot perception (simulated hearing/sight, reaction time — not omniscient aim/wallhacking)
+- [ ] Bot navigation (a navmesh or waypoint graph — no such data exists for any map yet)
+- [ ] Bot tactical behavior: buy decisions, site attack/defense, rotations, plant/defuse, utility usage, team coordination/callouts between bots
+
+### Matchmaking, ranking & social
+- [ ] Any matchmaking at all (mode/region/skill-based queue, party-size handling, ping-aware server selection)
+- [ ] Skill rating / rank tiers + rank-up/down flow (names/structure to be designed fresh, not copied)
+- [ ] Leaderboards (global/region/country/friends; by rating, wins, kills, headshots, matches)
+- [ ] Friends list (add/remove/online-status/invite/join lobby/block/report)
+- [ ] Lobby/party system (pre-match lobby with ready-check, map/mode selection, invite/kick/promote-leader) — distinct from and prerequisite to matchmaking
+- [ ] Player profile (level, rank, W/L, K/D, HS%, favorite weapons/maps, playtime, recent matches)
+- [ ] Match history persistence (date, map, mode, result, per-match stats) — currently nothing about a match outcome is saved anywhere
+- [ ] Post-match results screen (winner, personal/team stats, rewards, rank delta) beyond the current bare round-win scoreboard tally
+
+### Server architecture & competitive integrity
+- [ ] Client/server split of any kind — the engine is a single process with no network layer today, so every item below is currently a hard blocker, not a refinement
+- [ ] Dedicated, authoritative server (server owns position/hit/damage/round/economy/objective state; the client only sends inputs)
+- [ ] Configurable tick-rate / server simulation frequency
+- [ ] Client-side prediction + server reconciliation, interpolation/extrapolation for other players
+- [ ] Lag compensation (ping/jitter/packet-loss-aware hit registration)
+- [ ] Anti-cheat: server-side plausibility checks (impossible movement/speed/fire-rate/position), detection heuristics for aimbot/triggerbot/wallhack/speedhack/no-recoil/no-spread/automation, file-integrity checks, suspicious-network-pattern flagging, and an escalation path (monitor → remove from match → ban → flag for review)
+- [ ] Server-side input validation in general (reject impossible client-claimed state before it affects the match)
+
+### Spectator & replay
+- [ ] Spectator mode (follow a player, free camera, first/third person toggle, radar/killfeed/round-info overlay, team-overview mode)
+- [ ] Demo/replay recording (positions, shots, hits, kills, grenades, objective actions, round state) and a player (play/pause/FF/rewind, jump to round, follow a player, free camera)
+- [ ] A dedicated broadcast/observer mode for tournaments
+
+### HUD, UI & settings
+- [ ] Killfeed (attacker → victim, weapon icon, headshot/wallbang/assist/team-kill indicators)
+- [ ] Quick team-comms / radio commands (no-mic-required "enemy spotted"/"going A"/"rotate"/etc.)
+- [ ] Full main-menu shell beyond Play/Watch/Inventory/Store: Loadout, Profile, Match History, Rank, Leaderboard, Settings, Workshop, Community
+- [ ] A real Settings menu: video (resolution/fullscreen/vsync/fps cap/texture-shadow-effects-AA-AO/particle quality), audio (master/music/effects/voice/UI volume), controls (full rebinding, not just movement defaults), mouse (sensitivity, ADS sensitivity, raw input, acceleration), crosshair customization (color/size/thickness/gap/outline/dot/dynamic vs. static)
+- [ ] Controller input support (currently keyboard/mouse only)
+- [ ] HUD configurability (currently a fixed layout)
+- [ ] Minimap info gated by actual game knowledge (only show what a team legitimately knows) — today's single-player radar just shows the map + own dot, there's no "known enemy info" concept to gate yet
+
+### Progression, cosmetics & content pipeline
+- [ ] Loadout screen (equip a specific owned skin per weapon per team) — listed above too; repeated here because it's also the entry point for the wider cosmetic system below
+- [ ] Skin system with rarity/quality/pattern/wear/float-style metadata that never affects weapon function (today's `csmenu` inventory economy is a reasonable skeleton for this but has no wear/pattern/float model)
+- [ ] Persisting inventory/currency/profile to disk (currently resets every launch)
+- [ ] Trade-up-style contracts, StatTrak-equivalent counters, stickers, sprays, music kits, agent/character cosmetics
+- [ ] Workshop/custom-content support (community maps/skins/sounds/sprays/UI/modes), sandboxed for safety
+- [ ] Store front for cosmetics-only purchases (no pay-to-win) — real-money payment rails specifically are already flagged above as needing a legal/compliance pass before any engineering work, independent of the cosmetic system itself
+
+### Moderation & trust
+- [ ] Player reporting (cheating/griefing/toxicity/abusive voice/team-killing/exploiting)
+- [ ] Admin/moderation tooling (player/match search, report queue, bans, mutes, chat logs, replay access, server logs) with a mandatory audit trail
+
+### Economy depth
+- [ ] Loss-bonus streak, plant/defuse/kill economy bonuses beyond the current flat per-round reward
+- [ ] The full buy-decision spectrum as a real strategic choice (full buy/force buy/eco/half-buy/save) — today there's one weapon slot and no team-wide economy signal to react to
+
 ## Planned future asset source: CS2/CS:GO-style weapon models
 
 Once the MDL pipeline and gameplay are further along, the plan is to switch
