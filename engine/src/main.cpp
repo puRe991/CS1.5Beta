@@ -20,6 +20,7 @@
 #include "render/world_mesh.h"
 #include "render/skybox.h"
 #include "render/particles.h"
+#include "render/decals.h"
 
 namespace {
 const char* kWorldVertexShader = R"(#version 120
@@ -344,6 +345,17 @@ int main(int argc, char** argv) {
     int fxSmoke = particles.loadEffect(wadDir + "/sprites/smokepuff.spr");
     int fxExplosion = particles.loadEffect(wadDir + "/sprites/fexplo.spr");
 
+    // Decals: bullet holes and blood, using the real GoldSrc decal
+    // textures (decals.wad's "{shot*"/"{blood*" lumps — a grayscale ramp
+    // used as an alpha mask, tinted here since the palette carries no
+    // actual color) instead of the plain dark dot this replaces. A few
+    // variants each, picked randomly per spawn like the original engine.
+    DecalSystem decals;
+    std::vector<int> bulletHoleDecals = decals.loadGroup(wadDir + "/decals.wad",
+        {"{shot1", "{shot2", "{shot3", "{shot4", "{shot5"}, 20, 20, 20);
+    std::vector<int> bloodDecals = decals.loadGroup(wadDir + "/decals.wad",
+        {"{blood1", "{blood2", "{blood3", "{blood4", "{blood5", "{blood6"}, 90, 4, 4);
+
     EntitySystem entities;
     entities.build(map);
     std::printf("entities: %zu spawns (CT/T), %zu bomb targets, %zu buy zones\n",
@@ -407,8 +419,6 @@ int main(int argc, char** argv) {
     constexpr int kMagazineSize = 30;
     int ammoInMag = kMagazineSize;
     bool mouseWasDown = false;
-    std::vector<Vec3> impactMarks;
-    constexpr size_t kMaxImpactMarks = 64;
 
     // --- Damage flash (screen reddens briefly when hurt) ---
     int lastHealth = kMaxHealth;
@@ -471,7 +481,13 @@ int main(int argc, char** argv) {
         spaceWasDown = spaceDown;
 
         bool hDown = keys[SDL_SCANCODE_H];
-        if (hDown && !hWasDown) damagePlayer(player, 25); // debug key: test damage/death/respawn
+        if (hDown && !hWasDown) {
+            damagePlayer(player, 25); // debug key: test damage/death/respawn
+            // No hittable NPCs exist yet to splatter blood near, so this
+            // demonstrates the decal on the one damageable thing there is:
+            // a splash on the floor at the player's own feet.
+            decals.spawn(bloodDecals, Vec3f{camera.x, camera.y, camera.z}, Vec3f{0, 0, 1}, 10.0f);
+        }
         hWasDown = hDown;
 
         bool nDown = keys[SDL_SCANCODE_N];
@@ -688,10 +704,11 @@ int main(int argc, char** argv) {
             constexpr float kRange = 4096.0f;
             Vec3 traceEnd{eye.x + forwardDir.x * kRange, eye.y + forwardDir.y * kRange, eye.z + forwardDir.z * kRange};
             Vec3 hit;
-            if (map.traceLine(traceStart, traceEnd, hit)) {
-                if (impactMarks.size() >= kMaxImpactMarks) impactMarks.erase(impactMarks.begin());
-                impactMarks.push_back(hit);
+            Vec3 hitNormal;
+            if (map.traceLine(traceStart, traceEnd, hit, &hitNormal)) {
                 particles.spawn(fxSmoke, Vec3f{(float)hit.x, (float)hit.y, (float)hit.z}, 0.35f, 0.6f);
+                decals.spawn(bulletHoleDecals, Vec3f{(float)hit.x, (float)hit.y, (float)hit.z},
+                             Vec3f{(float)hitNormal.x, (float)hitNormal.y, (float)hitNormal.z}, 6.0f);
             }
         }
         mouseWasDown = mouseDown;
@@ -718,23 +735,21 @@ int main(int argc, char** argv) {
 
         // World geometry: shader + VBO pipeline (see render/world_mesh.*).
         // Model matrix is identity — BSP face vertices are already world space.
+        // PVS culling: computed from the actual render viewpoint (viewEye —
+        // the chase camera's position in third person, not the player's own
+        // eye), since that's genuinely what the frustum can see from.
         Mat4 mvp = multiply(proj, view);
+        std::vector<bool> visibleFaces = map.computeVisibleFaces(Vec3{viewEye.x, viewEye.y, viewEye.z});
         worldShader.use();
         worldShader.setMat4("uMVP", mvp);
         worldShader.setInt("uTexture", 0);
         worldShader.setInt("uLightmap", 1);
-        worldMesh.draw(worldShader);
+        worldMesh.draw(worldShader, visibleFaces);
         glUseProgram(0); // back to the fixed-function pipeline for everything below
 
-        // Bullet impact marks: small dark points on whatever they hit.
-        glDisable(GL_TEXTURE_2D);
-        glPointSize(6.0f);
-        glColor3f(0.05f, 0.05f, 0.05f);
-        glBegin(GL_POINTS);
-        for (const auto& mark : impactMarks) glVertex3f(mark.x, mark.y, mark.z);
-        glEnd();
-        glColor3f(1.0f, 1.0f, 1.0f);
-        glEnable(GL_TEXTURE_2D);
+        // Decals: real bullet-hole/blood textures glued to the surfaces
+        // they hit, replacing the old plain dark impact dots.
+        decals.draw();
 
         // Particle effects: billboarded to face the real camera (not the
         // view model's screen-locked axes), same right/up construction the

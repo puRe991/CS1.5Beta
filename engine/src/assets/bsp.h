@@ -65,12 +65,32 @@ public:
     // clipnode planes are already offset to account for the hull's extents.
     bool pointInSolid(Vec3 point) const;
 
+    // Same traversal as pointInSolid, but also reports the last clip plane
+    // tested before reaching a solid leaf (see traceLine's outNormal).
+    bool pointInSolid(Vec3 point, Vec3& outPlaneNormal) const;
+
     // Steps from start toward end (in fixed increments) until it enters solid
     // geometry or reaches the end. Returns true and sets outHit on a hit.
     // Deliberately simple (not a proper swept hull trace) — good enough for
     // bullet impact marks; the player hull's box inflation means it stops
     // slightly before the true wall face, a known simplification.
-    bool traceLine(Vec3 start, Vec3 end, Vec3& outHit) const;
+    // outNormal (if non-null) is set to the clip plane that classified the
+    // hit point as solid — an approximation of the true surface normal
+    // (exact for the common case of an axis-aligned wall/floor brush), used
+    // to orient decals against the surface.
+    bool traceLine(Vec3 start, Vec3 end, Vec3& outHit, Vec3* outNormal = nullptr) const;
+
+    // PVS-based visibility culling: which faces() are potentially visible
+    // from a given viewpoint, indexed exactly like faces(). Returns an
+    // empty vector if the map has no usable visibility data (e.g. the
+    // point resolved to the outside/solid leaf, or the map was compiled
+    // without one) — callers should treat that as "draw everything".
+    std::vector<bool> computeVisibleFaces(Vec3 viewPos) const;
+
+    // Which BSP leaf each face() belongs to (-1 if unknown), same
+    // indexing as faces() — used to sort draw batches for locality so
+    // PVS-culled ranges coalesce into fewer, larger draw calls.
+    const std::vector<int32_t>& faceLeafIndices() const { return faceLeaf_; }
 
 private:
     struct Plane {
@@ -79,6 +99,14 @@ private:
     struct ClipNode {
         int32_t planeNum;
         int16_t children[2];
+    };
+    struct RenderNode {
+        int32_t planeNum;
+        int32_t children[2]; // widened from the file's int16_t; negative = -(leaf)-1
+    };
+    struct Leaf {
+        int32_t visOfs; // -1 = no vis data for this leaf
+        uint16_t firstMarkSurface, numMarkSurfaces;
     };
 
     std::vector<BspFace> faces_;
@@ -89,5 +117,14 @@ private:
     std::vector<BspModelBounds> models_;
     int32_t hull1HeadNode_ = -1;
 
+    std::vector<RenderNode> nodes_;
+    std::vector<Leaf> leafs_;
+    std::vector<uint16_t> markSurfaces_;
+    std::vector<uint8_t> visData_;
+    std::vector<int32_t> rawToCompactFace_; // raw DFace index -> faces_ index, or -1 if culled
+    std::vector<int32_t> faceLeaf_;         // faces_ index -> owning leaf, or -1
+    int32_t renderHeadNode_ = -1;
+
+    int32_t findLeaf(Vec3 point) const;
     void parseEntities(const std::string& entityText);
 };

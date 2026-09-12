@@ -15,10 +15,14 @@ constexpr int kLumpEntities = 0;
 constexpr int kLumpPlanes = 1;
 constexpr int kLumpTextures = 2;
 constexpr int kLumpVertexes = 3;
+constexpr int kLumpVisibility = 4;
+constexpr int kLumpNodes = 5;
 constexpr int kLumpTexInfo = 6;
 constexpr int kLumpFaces = 7;
 constexpr int kLumpLighting = 8;
 constexpr int kLumpClipNodes = 9;
+constexpr int kLumpLeafs = 10;
+constexpr int kLumpMarkSurfaces = 11;
 constexpr int kLumpEdges = 12;
 constexpr int kLumpSurfEdges = 13;
 constexpr int kLumpModels = 14;
@@ -80,6 +84,21 @@ struct DModel {
     int32_t headNode[4]; // one BSP tree per hull: 0=point, 1=player box, 2=large box, 3=crouch box
     int32_t visLeafs;
     int32_t firstFace, numFaces;
+};
+
+struct DNode {
+    int32_t planeNum;
+    int16_t children[2]; // negative = -(leaf index)-1
+    int16_t mins[3], maxs[3];
+    uint16_t firstFace, numFaces;
+};
+
+struct DLeaf {
+    int32_t contents;
+    int32_t visOfs; // -1 = no vis data
+    int16_t mins[3], maxs[3];
+    uint16_t firstMarkSurface, numMarkSurfaces;
+    uint8_t ambientLevels[4];
 };
 
 std::string toLower(std::string s) {
@@ -146,6 +165,7 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
 
     std::vector<uint8_t> entityData, texData, vertexData, texInfoData, faceData, edgeData, surfEdgeData;
     std::vector<uint8_t> planeData, clipNodeData, modelData, lightData;
+    std::vector<uint8_t> nodeData, leafData, markSurfaceData;
     bool ok = readLump(f, header.lumps[kLumpEntities], entityData) &&
               readLump(f, header.lumps[kLumpTextures], texData) &&
               readLump(f, header.lumps[kLumpVertexes], vertexData) &&
@@ -156,9 +176,30 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
               readLump(f, header.lumps[kLumpPlanes], planeData) &&
               readLump(f, header.lumps[kLumpClipNodes], clipNodeData) &&
               readLump(f, header.lumps[kLumpModels], modelData) &&
-              readLump(f, header.lumps[kLumpLighting], lightData);
+              readLump(f, header.lumps[kLumpLighting], lightData) &&
+              readLump(f, header.lumps[kLumpNodes], nodeData) &&
+              readLump(f, header.lumps[kLumpLeafs], leafData) &&
+              readLump(f, header.lumps[kLumpMarkSurfaces], markSurfaceData) &&
+              readLump(f, header.lumps[kLumpVisibility], visData_);
     std::fclose(f);
     if (!ok) return false;
+
+    nodes_.clear();
+    for (size_t o = 0; o + sizeof(DNode) <= nodeData.size(); o += sizeof(DNode)) {
+        const DNode* n = reinterpret_cast<const DNode*>(nodeData.data() + o);
+        nodes_.push_back({n->planeNum, {n->children[0], n->children[1]}});
+    }
+
+    leafs_.clear();
+    for (size_t o = 0; o + sizeof(DLeaf) <= leafData.size(); o += sizeof(DLeaf)) {
+        const DLeaf* l = reinterpret_cast<const DLeaf*>(leafData.data() + o);
+        leafs_.push_back({l->visOfs, l->firstMarkSurface, l->numMarkSurfaces});
+    }
+
+    markSurfaces_.clear();
+    for (size_t o = 0; o + sizeof(uint16_t) <= markSurfaceData.size(); o += sizeof(uint16_t)) {
+        markSurfaces_.push_back(*reinterpret_cast<const uint16_t*>(markSurfaceData.data() + o));
+    }
 
     planes_.clear();
     for (size_t o = 0; o + sizeof(DPlane) <= planeData.size(); o += sizeof(DPlane)) {
@@ -181,8 +222,10 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
             Vec3{m->maxs[0], m->maxs[1], m->maxs[2]}
         });
     }
+    renderHeadNode_ = -1;
     if (!models_.empty()) {
         hull1HeadNode_ = reinterpret_cast<const DModel*>(modelData.data())->headNode[1];
+        renderHeadNode_ = reinterpret_cast<const DModel*>(modelData.data())->headNode[0];
     }
 
     parseEntities(std::string(entityData.begin(), entityData.end()));
@@ -302,6 +345,7 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     // --- Faces: build a vertex fan per face from surfedges, with UVs from texinfo ---
     faces_.clear();
     faces_.reserve(numFaces);
+    rawToCompactFace_.assign(numFaces, -1);
 
     for (size_t fi = 0; fi < numFaces; ++fi) {
         const DFace& df = faces[fi];
@@ -367,12 +411,96 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
             }
         }
 
-        if (face.vertices.size() >= 3) faces_.push_back(std::move(face));
+        if (face.vertices.size() >= 3) {
+            rawToCompactFace_[fi] = (int32_t)faces_.size();
+            faces_.push_back(std::move(face));
+        }
+    }
+
+    // --- Per-face leaf ownership, for locality-sorting PVS draw batches ---
+    faceLeaf_.assign(faces_.size(), -1);
+    for (size_t li = 0; li < leafs_.size(); ++li) {
+        const Leaf& leaf = leafs_[li];
+        for (uint32_t m = 0; m < leaf.numMarkSurfaces; ++m) {
+            size_t entry = (size_t)leaf.firstMarkSurface + m;
+            if (entry >= markSurfaces_.size()) continue;
+            uint16_t raw = markSurfaces_[entry];
+            if (raw >= rawToCompactFace_.size()) continue;
+            int32_t compact = rawToCompactFace_[raw];
+            if (compact >= 0 && faceLeaf_[compact] < 0) faceLeaf_[compact] = (int32_t)li;
+        }
     }
 
     (void)numEdges;
     (void)numSurfEdges;
     return true;
+}
+
+int32_t BspMap::findLeaf(Vec3 point) const {
+    if (renderHeadNode_ < 0 || nodes_.empty()) return -1;
+    int32_t node = renderHeadNode_;
+    while (node >= 0) {
+        const RenderNode& n = nodes_[node];
+        if (n.planeNum < 0 || (size_t)n.planeNum >= planes_.size()) return -1;
+        const Plane& pl = planes_[n.planeNum];
+        float d = pl.nx * point.x + pl.ny * point.y + pl.nz * point.z - pl.dist;
+        node = d >= 0 ? n.children[0] : n.children[1];
+    }
+    return -node - 1;
+}
+
+std::vector<bool> BspMap::computeVisibleFaces(Vec3 viewPos) const {
+    std::vector<bool> result; // empty = fallback to "draw everything"
+    if (leafs_.empty() || visData_.empty() || markSurfaces_.empty()) return result;
+
+    int32_t leafIndex = findLeaf(viewPos);
+    // Leaf 0 is always the shared "outside the world" / solid leaf and
+    // carries no PVS row — nothing meaningful to cull against, so bail out
+    // to the safe default rather than culling everything.
+    if (leafIndex <= 0 || (size_t)leafIndex >= leafs_.size()) return result;
+
+    const Leaf& viewLeaf = leafs_[leafIndex];
+    if (viewLeaf.visOfs < 0 || (size_t)viewLeaf.visOfs >= visData_.size()) return result;
+
+    // Decompress the RLE-encoded PVS row: one bit per leaf, excluding leaf
+    // 0 (bit i corresponds to leaf i+1). A zero byte means "N more zero
+    // bytes follow" (the run length is the next byte); anything else is a
+    // literal byte of bits.
+    size_t numLeafBytes = (leafs_.size() + 7) / 8;
+    std::vector<uint8_t> decompressed(numLeafBytes, 0);
+    size_t bytePos = 0;
+    size_t srcPos = (size_t)viewLeaf.visOfs;
+    while (bytePos < numLeafBytes && srcPos < visData_.size()) {
+        if (visData_[srcPos] == 0) {
+            if (srcPos + 1 >= visData_.size()) break;
+            bytePos += visData_[srcPos + 1]; // already zero-initialized
+            srcPos += 2;
+        } else {
+            decompressed[bytePos] = visData_[srcPos];
+            ++bytePos;
+            ++srcPos;
+        }
+    }
+
+    result.assign(faces_.size(), false);
+    auto markLeafFaces = [&](int32_t li) {
+        if (li <= 0 || (size_t)li >= leafs_.size()) return;
+        const Leaf& leaf = leafs_[li];
+        for (uint32_t m = 0; m < leaf.numMarkSurfaces; ++m) {
+            size_t entry = (size_t)leaf.firstMarkSurface + m;
+            if (entry >= markSurfaces_.size()) continue;
+            uint16_t raw = markSurfaces_[entry];
+            if (raw >= rawToCompactFace_.size()) continue;
+            int32_t compact = rawToCompactFace_[raw];
+            if (compact >= 0) result[compact] = true;
+        }
+    };
+    markLeafFaces(leafIndex); // always include the leaf the viewer is standing in
+    for (size_t li = 1; li < leafs_.size(); ++li) {
+        size_t bit = li - 1;
+        if ((decompressed[bit / 8] >> (bit % 8)) & 1) markLeafFaces((int32_t)li);
+    }
+    return result;
 }
 
 int BspMap::modelIndexFor(const BspEntity& ent) {
@@ -382,20 +510,32 @@ int BspMap::modelIndexFor(const BspEntity& ent) {
 }
 
 bool BspMap::pointInSolid(Vec3 point) const {
+    Vec3 unused;
+    return pointInSolid(point, unused);
+}
+
+bool BspMap::pointInSolid(Vec3 point, Vec3& outPlaneNormal) const {
     if (hull1HeadNode_ < 0 || clipNodes_.empty()) return false;
 
     int32_t node = hull1HeadNode_;
+    outPlaneNormal = Vec3{0, 0, 1};
     while (node >= 0) {
         const ClipNode& cn = clipNodes_[node];
         if (cn.planeNum < 0 || (size_t)cn.planeNum >= planes_.size()) return false;
         const Plane& pl = planes_[cn.planeNum];
         float d = pl.nx * point.x + pl.ny * point.y + pl.nz * point.z - pl.dist;
+        // Orient so the normal always points away from the side this step
+        // is about to descend into (the side that ultimately turns out to
+        // be solid) — the true outward surface normal, not just the
+        // plane's stored (arbitrary) direction.
+        float sign = d >= 0 ? -1.0f : 1.0f;
+        outPlaneNormal = Vec3{pl.nx * sign, pl.ny * sign, pl.nz * sign};
         node = d >= 0 ? cn.children[0] : cn.children[1];
     }
     return node == kContentsSolid;
 }
 
-bool BspMap::traceLine(Vec3 start, Vec3 end, Vec3& outHit) const {
+bool BspMap::traceLine(Vec3 start, Vec3 end, Vec3& outHit, Vec3* outNormal) const {
     constexpr float kStep = 4.0f;
     float dx = end.x - start.x, dy = end.y - start.y, dz = end.z - start.z;
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -404,8 +544,10 @@ bool BspMap::traceLine(Vec3 start, Vec3 end, Vec3& outHit) const {
 
     for (float t = 0.0f; t <= len; t += kStep) {
         Vec3 p{start.x + dx * t, start.y + dy * t, start.z + dz * t};
-        if (pointInSolid(p)) {
+        Vec3 planeNormal;
+        if (pointInSolid(p, planeNormal)) {
             outHit = p;
+            if (outNormal) *outNormal = planeNormal;
             return true;
         }
     }

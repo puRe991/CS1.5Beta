@@ -69,8 +69,17 @@ void WorldMesh::build(const BspMap& map, const std::vector<GLuint>& texIds) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, kAtlasSize, kAtlasSize, 0, GL_RGB, GL_UNSIGNED_BYTE, atlas.data());
 
     // --- Bucket triangulated vertices by base texture, same as before, now
-    // also carrying each vertex's lightmap UV within the shared atlas. ---
-    std::map<GLuint, std::vector<Vertex>> byTexture;
+    // also carrying each vertex's lightmap UV within the shared atlas, and
+    // (per face) which leaf it belongs to — needed to sort each texture's
+    // faces by leaf below, so PVS-visible faces end up contiguous in the
+    // VBO and coalesce into few draw calls instead of one per face. ---
+    struct PendingFace {
+        int32_t leaf;
+        int faceIndex;
+        std::vector<Vertex> verts;
+    };
+    std::map<GLuint, std::vector<PendingFace>> byTexture;
+    const std::vector<int32_t>& faceLeaf = map.faceLeafIndices();
 
     for (size_t fi = 0; fi < map.faces().size(); ++fi) {
         const BspFace& face = map.faces()[fi];
@@ -111,19 +120,35 @@ void WorldMesh::build(const BspMap& map, const std::vector<GLuint>& texIds) {
         };
 
         // Triangle fan: (0, i, i+1) for i in [1, n-2].
-        auto& bucket = byTexture[texId];
+        PendingFace pending;
+        pending.leaf = fi < faceLeaf.size() ? faceLeaf[fi] : -1;
+        pending.faceIndex = (int)fi;
         for (size_t i = 1; i + 1 < face.vertices.size(); ++i) {
-            bucket.push_back(toVertex(0));
-            bucket.push_back(toVertex(i));
-            bucket.push_back(toVertex(i + 1));
+            pending.verts.push_back(toVertex(0));
+            pending.verts.push_back(toVertex(i));
+            pending.verts.push_back(toVertex(i + 1));
         }
+        byTexture[texId].push_back(std::move(pending));
     }
 
     std::vector<Vertex> all;
     groups_.clear();
-    for (auto& [texId, verts] : byTexture) {
-        groups_.push_back(DrawGroup{texId, (GLsizei)all.size(), (GLsizei)verts.size()});
-        all.insert(all.end(), verts.begin(), verts.end());
+    for (auto& [texId, pendingFaces] : byTexture) {
+        // Sorting by leaf clusters spatially-nearby faces together, so a
+        // PVS query that marks a contiguous run of leaves visible turns
+        // into one (or a few) glDrawArrays calls instead of many tiny ones.
+        std::stable_sort(pendingFaces.begin(), pendingFaces.end(),
+                          [](const PendingFace& a, const PendingFace& b) { return a.leaf < b.leaf; });
+
+        DrawGroup group;
+        group.texId = texId;
+        group.start = (GLsizei)all.size();
+        for (const auto& pf : pendingFaces) {
+            group.faceRanges.push_back(FaceRange{pf.faceIndex, (GLsizei)all.size(), (GLsizei)pf.verts.size()});
+            all.insert(all.end(), pf.verts.begin(), pf.verts.end());
+        }
+        group.count = (GLsizei)all.size() - group.start;
+        groups_.push_back(std::move(group));
     }
 
     glGenBuffers(1, &vbo_);
@@ -132,7 +157,7 @@ void WorldMesh::build(const BspMap& map, const std::vector<GLuint>& texIds) {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
-void WorldMesh::draw(const Shader& shader) const {
+void WorldMesh::draw(const Shader& shader, const std::vector<bool>& visibleFaces) const {
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
 
     GLint posLoc = shader.attribLocation("aPos");
@@ -149,9 +174,39 @@ void WorldMesh::draw(const Shader& shader) const {
     glBindTexture(GL_TEXTURE_2D, lightmapAtlas_);
     glActiveTexture(GL_TEXTURE0);
 
+    auto isVisible = [&](int faceIndex) {
+        return faceIndex >= 0 && (size_t)faceIndex < visibleFaces.size() && visibleFaces[faceIndex];
+    };
+
     for (const auto& group : groups_) {
         glBindTexture(GL_TEXTURE_2D, group.texId);
-        glDrawArrays(GL_TRIANGLES, group.start, group.count);
+
+        if (visibleFaces.empty()) {
+            // No PVS data for this viewpoint (or the map has none at all)
+            // — draw the whole group in one call, same as before PVS
+            // culling existed.
+            glDrawArrays(GL_TRIANGLES, group.start, group.count);
+            continue;
+        }
+
+        // Faces are stored sorted by leaf (see build()), so visible ones
+        // tend to run in contiguous stretches — coalesce each stretch into
+        // a single glDrawArrays instead of one per face.
+        size_t i = 0;
+        while (i < group.faceRanges.size()) {
+            if (!isVisible(group.faceRanges[i].faceIndex)) { ++i; continue; }
+            GLsizei rangeStart = group.faceRanges[i].start;
+            GLsizei rangeEnd = rangeStart + group.faceRanges[i].count;
+            size_t j = i + 1;
+            while (j < group.faceRanges.size() &&
+                   group.faceRanges[j].start == rangeEnd &&
+                   isVisible(group.faceRanges[j].faceIndex)) {
+                rangeEnd += group.faceRanges[j].count;
+                ++j;
+            }
+            glDrawArrays(GL_TRIANGLES, rangeStart, rangeEnd - rangeStart);
+            i = j;
+        }
     }
 
     glDisableVertexAttribArray(posLoc);

@@ -15,14 +15,27 @@ public:
     // lightmapSampler is the texture unit index (e.g. 1) the shader's
     // "uLightmap" uniform should be bound to; the base texture stays on unit 0.
     void build(const BspMap& map, const std::vector<GLuint>& texIds);
-    void draw(const Shader& shader) const;
+
+    // visibleFaces: from BspMap::computeVisibleFaces(), indexed exactly
+    // like the BspMap::faces() this mesh was built from. Empty (the
+    // default) draws every face, same as before PVS culling existed —
+    // pass it whenever the caller has no usable visibility data (outside
+    // the map, or a map with no compiled PVS).
+    void draw(const Shader& shader, const std::vector<bool>& visibleFaces = {}) const;
     ~WorldMesh();
 
 private:
+    // One face's vertex range within its texture group's VBO block, so
+    // draw() can skip/emit sub-ranges by PVS visibility instead of always
+    // drawing the whole group in one call.
+    struct FaceRange {
+        int faceIndex;
+        GLsizei start, count;
+    };
     struct DrawGroup {
         GLuint texId;
-        GLsizei start;
-        GLsizei count;
+        GLsizei start, count; // the group's full range, used when visibleFaces is empty
+        std::vector<FaceRange> faceRanges; // sorted by leaf for good coalescing
     };
 
     GLuint vbo_ = 0;

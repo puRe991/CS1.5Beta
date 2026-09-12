@@ -24,6 +24,7 @@ add_executable(cs15engine
     src/render/world_mesh.cpp
     src/render/skybox.cpp
     src/render/particles.cpp
+    src/render/decals.cpp
 )
 
 target_include_directories(cs15engine PRIVATE ${SDL2_INCLUDE_DIRS} src)
