@@ -333,6 +333,10 @@ int main(int argc, char** argv) {
     float damageFlashTimer = 0.0f;
     constexpr float kDamageFlashDuration = 0.35f;
 
+    // --- Muzzle flash, drawn at the view model's real attachment point ---
+    constexpr float kMuzzleFlashDuration = 0.05f;
+    float muzzleFlashTimer = 0.0f;
+
     // --- Health/death/respawn + round loop ---
     RoundState round;
     bool hWasDown = false; // 'H' is a debug key to test damage/death without needing fall damage
@@ -464,6 +468,7 @@ int main(int argc, char** argv) {
         if (player.health < lastHealth) damageFlashTimer = kDamageFlashDuration;
         lastHealth = player.health;
         if (damageFlashTimer > 0.0f) damageFlashTimer -= dt;
+        if (muzzleFlashTimer > 0.0f) muzzleFlashTimer -= dt;
 
         // Zone checks, driven by the real func_bomb_target/func_buyzone
         // brush bounds parsed from the map's entity lump.
@@ -555,6 +560,7 @@ int main(int argc, char** argv) {
         bool mouseDown = SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON(SDL_BUTTON_LEFT);
         if (mouseDown && !mouseWasDown && ammoInMag > 0 && player.alive && !buyMenuOpen) {
             --ammoInMag;
+            muzzleFlashTimer = kMuzzleFlashDuration;
             Vec3 traceStart{eye.x, eye.y, eye.z};
             constexpr float kRange = 4096.0f;
             Vec3 traceEnd{eye.x + forwardDir.x * kRange, eye.y + forwardDir.y * kRange, eye.z + forwardDir.z * kRange};
@@ -625,6 +631,32 @@ int main(int argc, char** argv) {
             glRotatef(90.0f, 0.0f, 0.0f, 1.0f);
 
             drawMdlTriangles(viewModel, viewModelTexIds);
+
+            // Muzzle flash: drawn at the view model's own attachment point
+            // (attachment 0 — GoldSrc models rarely name these, they're
+            // referenced by index) using whatever transform is already on
+            // the matrix stack, so it lines up with the barrel exactly as
+            // rendered without needing to re-derive a world-space position.
+            if (muzzleFlashTimer > 0.0f && !viewModel.attachments().empty()) {
+                // Drawn as a small billboard quad (facing the camera, since
+                // this is the rotation-only view-model matrix stack) rather
+                // than a GL_POINTS sprite — point-size support is spotty
+                // across GL implementations, a quad renders everywhere.
+                const MdlAttachment& muzzle = viewModel.attachments()[0];
+                constexpr float kFlashRadius = 6.0f;
+                glDisable(GL_TEXTURE_2D);
+                glDisable(GL_DEPTH_TEST);
+                glColor4f(1.0f, 0.9f, 0.4f, 1.0f);
+                glBegin(GL_TRIANGLE_FAN);
+                glVertex3f(muzzle.x, muzzle.y - kFlashRadius, muzzle.z - kFlashRadius);
+                glVertex3f(muzzle.x, muzzle.y + kFlashRadius, muzzle.z - kFlashRadius);
+                glVertex3f(muzzle.x, muzzle.y + kFlashRadius, muzzle.z + kFlashRadius);
+                glVertex3f(muzzle.x, muzzle.y - kFlashRadius, muzzle.z + kFlashRadius);
+                glEnd();
+                glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+                glEnable(GL_DEPTH_TEST);
+                glEnable(GL_TEXTURE_2D);
+            }
 
             glMatrixMode(GL_PROJECTION);
             glLoadMatrixf(proj.m);

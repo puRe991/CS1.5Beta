@@ -95,7 +95,7 @@ engine/
 - [ ] Particle effects (muzzle flashes, explosions, smoke)
 - [ ] SPR sprite format support (used for effects, some HUD elements)
 - [ ] MDL animation playback (currently only the static bind pose renders — no walk/run/shoot animation blending, no sequence system)
-- [ ] MDL attachment points (muzzle flash origin, weapon-to-hand attachment, etc.)
+- [x] MDL attachment points (muzzle flash origin, weapon-to-hand attachment, etc.) — parsed from `mstudioattachment_t` and transformed through each attachment's owning bone bind-pose (same math path as vertices); the view model's muzzle flash is drawn at attachment 0's real position instead of a fixed offset. Player-model hand attachments are parsed and available via `MdlModel::attachments()`/`findAttachment()`, but the engine has no third-person/other-player rendering yet to attach a weapon model to.
 - [x] View model (first-person weapon model) rendering in the main engine window — own narrow-FOV projection pass + depth clear so it never clips into world geometry (pose/offset is a fixed approximation, not attachment-point accurate — see animation TODO below)
 
 ### Physics & Movement

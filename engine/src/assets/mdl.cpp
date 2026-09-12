@@ -73,6 +73,18 @@ struct StudioMesh {
     int32_t normIndex;
 };
 
+// Matches the HL SDK's mstudioattachment_t layout exactly (32+4+4+12+36=88
+// bytes): name, an unused type field, the owning bone, and the attachment's
+// local-space origin relative to that bone (vectors[3] are basis vectors
+// for orientation — unused here, we only need the position).
+struct StudioAttachment {
+    char name[32];
+    int32_t type;
+    int32_t bone;
+    float org[3];
+    float vectors[3][3];
+};
+
 constexpr int32_t kStudioNfMasked = 0x40;
 
 // 3x3 rotation + translation, composed as world = parent * local.
@@ -180,6 +192,21 @@ bool MdlModel::load(const std::string& path) {
         textures_.push_back(std::move(tex));
     }
 
+    // --- Attachment points: muzzle origin, weapon-to-hand bone, etc. ---
+    attachments_.clear();
+    const StudioAttachment* studioAttach = reinterpret_cast<const StudioAttachment*>(data.data() + hdr->attachmentIndex);
+    for (int32_t i = 0; i < hdr->numAttachments; ++i) {
+        const StudioAttachment& sa = studioAttach[i];
+        MdlAttachment att;
+        att.name.assign(sa.name, strnlen(sa.name, sizeof(sa.name)));
+        int32_t boneIdx = sa.bone;
+        if (boneIdx < 0 || (size_t)boneIdx >= boneWorld.size()) boneIdx = 0;
+        if (!boneWorld.empty()) {
+            apply(boneWorld[boneIdx], sa.org[0], sa.org[1], sa.org[2], att.x, att.y, att.z);
+        }
+        attachments_.push_back(std::move(att));
+    }
+
     // Skin family 0: skinref -> texture index.
     const int16_t* skinRefs = reinterpret_cast<const int16_t*>(data.data() + hdr->skinIndex);
 
@@ -254,4 +281,11 @@ bool MdlModel::load(const std::string& path) {
     }
 
     return true;
+}
+
+const MdlAttachment* MdlModel::findAttachment(const std::string& name) const {
+    for (const auto& a : attachments_) {
+        if (a.name == name) return &a;
+    }
+    return nullptr;
 }
