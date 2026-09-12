@@ -623,7 +623,15 @@ int main(int argc, char** argv) {
             glLoadMatrixf(viewModelProj.m);
             glMatrixMode(GL_MODELVIEW);
 
-            Mat4 rotOnly = lookAt(Vec3f{0, 0, 0}, forwardDir, Vec3f{0, 0, 1});
+            // Fixed reference axis, NOT the player's actual forwardDir: the
+            // view model is locked to the screen regardless of look
+            // direction (like any FPS weapon), so this must not depend on
+            // where the camera is currently facing — using forwardDir here
+            // previously rotated the whole view model (including its
+            // "forward" translate offset below) around the camera as the
+            // player looked around, occasionally spinning it clean out of
+            // the frustum.
+            Mat4 rotOnly = lookAt(Vec3f{0, 0, 0}, Vec3f{1, 0, 0}, Vec3f{0, 0, 1});
             glLoadMatrixf(rotOnly.m);
             glTranslatef(18.0f, -6.0f, -8.0f); // forward, right, down, in view-local (world-axis) units
             // View models are authored with their barrel along -Y, not along
