@@ -375,6 +375,7 @@ bool MdlModel::load(const std::string& path) {
         seq.fps = sd.fps > 0.0f ? sd.fps : 30.0f;
         seq.numFrames = std::max(1, sd.numFrames);
         seq.looping = (sd.flags & kStudioLooping) != 0;
+        seq.numBlends = std::max(1, sd.numBlends);
         sequences_.push_back(std::move(seq));
     }
 
@@ -397,7 +398,7 @@ int MdlModel::findSequence(const std::string& name) const {
     return -1;
 }
 
-std::vector<MdlTriangle> MdlModel::pose(int sequenceIndex, float frame) const {
+std::vector<MdlTriangle> MdlModel::pose(int sequenceIndex, float frame, float blend) const {
     if (sequenceIndex < 0 || (size_t)sequenceIndex >= sequences_.size() || fileData_.empty()) {
         return triangles_;
     }
@@ -413,14 +414,31 @@ std::vector<MdlTriangle> MdlModel::pose(int sequenceIndex, float frame) const {
     if (seq.seqGroup != 0) return triangles_;
 
     frame = std::clamp(frame, 0.0f, (float)(seq.numFrames - 1));
-    // Only the first blend is used; multi-blend (9-way aim direction)
-    // sequences still play, just without directional blending.
+    int32_t numBlends = std::max(1, seq.numBlends);
     const StudioAnim* anims = reinterpret_cast<const StudioAnim*>(data + seq.animIndex);
+
+    // Directional-blend sequences (e.g. a 9-way aim/shoot set) store
+    // numBlends full copies of the per-bone animation data back to back —
+    // [blend][bone] — so pick two adjacent blends by the normalized
+    // `blend` parameter and linearly interpolate the bones' decoded
+    // values between them. With numBlends == 1 (almost everything) this
+    // degenerates to blendA == blendB and costs one redundant decode.
+    float blendPos = std::clamp(blend, 0.0f, 1.0f) * (float)(numBlends - 1);
+    int32_t blendA = (int32_t)blendPos;
+    int32_t blendB = std::min(blendA + 1, numBlends - 1);
+    float blendT = blendPos - (float)blendA;
 
     std::vector<BoneXform> boneWorld(hdr->numBones);
     for (int32_t i = 0; i < hdr->numBones; ++i) {
+        float valueA[6], valueB[6];
+        extractBoneFrame(bones[i], anims[(size_t)blendA * hdr->numBones + i], frame, valueA);
         float value[6];
-        extractBoneFrame(bones[i], anims[i], frame, value);
+        if (blendA == blendB) {
+            std::memcpy(value, valueA, sizeof(value));
+        } else {
+            extractBoneFrame(bones[i], anims[(size_t)blendB * hdr->numBones + i], frame, valueB);
+            for (int c = 0; c < 6; ++c) value[c] = valueA[c] + (valueB[c] - valueA[c]) * blendT;
+        }
         BoneXform local = makeLocal(value);
         boneWorld[i] = bones[i].parent >= 0 ? compose(boneWorld[bones[i].parent], local) : local;
     }

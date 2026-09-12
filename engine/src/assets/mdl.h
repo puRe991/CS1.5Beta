@@ -35,6 +35,9 @@ struct MdlSequence {
     float fps = 30.0f;
     int numFrames = 1;
     bool looping = false;
+    // >1 for a directional-blend sequence (e.g. a 9-way aim/shoot pose set
+    // spanning look-up to look-down) — see pose()'s `blend` parameter.
+    int numBlends = 1;
 };
 
 // Loads a GoldSrc Studio Model (.mdl, version 10) into a flat triangle soup,
@@ -60,9 +63,16 @@ public:
     // interpolated) within one sequence, by decoding that sequence's
     // per-bone compressed animation tracks and re-skinning every vertex.
     // Not cached — call once per rendered frame, not per vertex access.
-    // Only the first blend of multi-blend (e.g. 9-way aim) sequences is
-    // used; those sequences still play, just without directional blending.
-    std::vector<MdlTriangle> pose(int sequenceIndex, float frame) const;
+    //
+    // `blend` (0..1) picks a point across a directional-blend sequence's
+    // numBlends variants (e.g. a 9-way aim/shoot set: 0 = full look-up,
+    // 1 = full look-down, 0.5 = level), linearly interpolated between the
+    // two nearest ones — a real analog of the engine's own pitch-driven
+    // blend controller, just fed a normalized value instead of a raw bone
+    // controller angle since there's no controller system here. Ignored
+    // (and free to omit) for the numBlends == 1 sequences that make up
+    // most of this game's asset set.
+    std::vector<MdlTriangle> pose(int sequenceIndex, float frame, float blend = 0.5f) const;
 
 private:
     std::vector<MdlTriangle> triangles_;

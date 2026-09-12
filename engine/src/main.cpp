@@ -365,6 +365,34 @@ int main(int argc, char** argv) {
         camera.yaw = yaw;
     }
 
+    // --- Third-person player body: a real MDL player skin (urban/terror),
+    // animated with the same pose()/sequence system as the view model, so
+    // that system actually drives a renderer instead of only ever being
+    // exercised by the first-person weapon. 'V' toggles the view; the
+    // model reloads whenever the team changes (matching the historical
+    // CT=urban/T=terror skins — no team-select or per-player skin system
+    // exists yet, so this is the one body per side).
+    MdlModel playerBodyModel;
+    std::vector<GLuint> playerBodyTexIds;
+    bool hasPlayerBodyModel = false;
+    bool thirdPerson = false;
+    int bodyIdleSeq = -1, bodyRunSeq = -1;
+    float bodyAnimTime = 0.0f;
+    auto equipPlayerBodyModel = [&](Team team) {
+        for (GLuint t : playerBodyTexIds) glDeleteTextures(1, &t);
+        playerBodyTexIds.clear();
+        std::string path = wadDir + "/models/player/" + (team == Team::CT ? "urban/urban.mdl" : "terror/terror.mdl");
+        hasPlayerBodyModel = playerBodyModel.load(path);
+        if (hasPlayerBodyModel) {
+            playerBodyTexIds.reserve(playerBodyModel.textures().size());
+            for (const auto& tex : playerBodyModel.textures()) playerBodyTexIds.push_back(uploadTexture(tex));
+            bodyIdleSeq = playerBodyModel.findSequence("idle1");
+            bodyRunSeq = playerBodyModel.findSequence("run");
+        }
+        return hasPlayerBodyModel;
+    };
+    equipPlayerBodyModel(player.team);
+
     Uint64 lastTicks = SDL_GetPerformanceCounter();
     bool running = true;
 
@@ -421,6 +449,8 @@ int main(int argc, char** argv) {
                     viewAnimState = ViewAnimState::Reload;
                     viewAnimTime = 0.0f;
                 }
+            } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_v) {
+                thirdPerson = !thirdPerson;
             } else if (event.type == SDL_MOUSEMOTION && !buyMenuOpen) {
                 camera.look((float)event.motion.xrel, (float)event.motion.yrel);
             }
@@ -449,6 +479,7 @@ int main(int argc, char** argv) {
             // Debug key: switch team and teleport to a spawn of the new
             // team, since there's no team-select UI or other players yet.
             player.team = (player.team == Team::CT) ? Team::T : Team::CT;
+            equipPlayerBodyModel(player.team);
             Vec3 origin{0, 0, 0};
             float yaw = 0.0f;
             pickSpawnForTeam(entities, player.team, origin, yaw);
@@ -537,6 +568,7 @@ int main(int argc, char** argv) {
         if (muzzleFlashTimer > 0.0f) muzzleFlashTimer -= dt;
         particles.update(dt);
         viewAnimTime += dt;
+        bodyAnimTime += dt;
 
         // Zone checks, driven by the real func_bomb_target/func_buyzone
         // brush bounds parsed from the map's entity lump.
@@ -622,7 +654,17 @@ int main(int argc, char** argv) {
             std::sin(pitchRad)
         };
         Vec3f center{eye.x + forwardDir.x, eye.y + forwardDir.y, eye.z + forwardDir.z};
-        Mat4 view = lookAt(eye, center, Vec3f{0, 0, 1});
+        // Third person: a simple chase camera pulled back behind the
+        // player along the same look direction (no collision against
+        // world geometry yet, so it can clip into walls in tight spots).
+        Vec3f viewEye = eye;
+        if (thirdPerson) {
+            constexpr float kChaseDist = 60.0f;
+            viewEye = Vec3f{eye.x - forwardDir.x * kChaseDist,
+                            eye.y - forwardDir.y * kChaseDist,
+                            eye.z - forwardDir.z * kChaseDist + 20.0f};
+        }
+        Mat4 view = lookAt(viewEye, thirdPerson ? eye : center, Vec3f{0, 0, 1});
 
         // --- Shooting: left click fires a hitscan trace, leaves an impact mark ---
         bool mouseDown = SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON(SDL_BUTTON_LEFT);
@@ -703,7 +745,31 @@ int main(int argc, char** argv) {
             particles.draw(camRight, camUp);
         }
 
-        if (hasViewModel) {
+        // Third-person player body: a real animated MDL skin instead of
+        // the first-person view model overlay, drawn as an ordinary world
+        // object (same proj/view already active from the world/particle
+        // pass above) at the player's own position and facing.
+        if (thirdPerson && hasPlayerBodyModel) {
+            bool isMoving = (forward != 0.0f || strafe != 0.0f) && player.alive;
+            int activeBodySeq = isMoving && bodyRunSeq >= 0 ? bodyRunSeq : bodyIdleSeq;
+            std::vector<MdlTriangle> bodyTriangles;
+            if (activeBodySeq >= 0) {
+                const MdlSequence& seq = playerBodyModel.sequences()[activeBodySeq];
+                float frame = std::fmod(bodyAnimTime * seq.fps, (float)seq.numFrames);
+                bodyTriangles = playerBodyModel.pose(activeBodySeq, frame);
+            } else {
+                bodyTriangles = playerBodyModel.triangles();
+            }
+
+            glMatrixMode(GL_MODELVIEW);
+            glLoadMatrixf(view.m);
+            glTranslatef(camera.x, camera.y, camera.z);
+            glRotatef(camera.yaw, 0.0f, 0.0f, 1.0f);
+            drawMdlTriangles(bodyTriangles, playerBodyModel.textures(), playerBodyTexIds);
+            glLoadMatrixf(view.m); // restore: undo the translate/rotate for whatever draws next
+        }
+
+        if (hasViewModel && !thirdPerson) {
             // Classic FPS trick: separate (narrower) projection so the model
             // isn't fisheye-distorted at close range, and cleared depth so
             // it never clips into world geometry.
