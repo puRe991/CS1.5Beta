@@ -17,6 +17,7 @@
 #include "render/shader.h"
 #include "render/world_mesh.h"
 #include "render/skybox.h"
+#include "render/particles.h"
 
 namespace {
 const char* kWorldVertexShader = R"(#version 120
@@ -290,6 +291,15 @@ int main(int argc, char** argv) {
         return hasViewModel;
     };
 
+    // Particle effects: muzzle flash, bullet-impact smoke, explosion — real
+    // GoldSrc .spr sprites, loaded once and reused for every spawn. Each
+    // load can fail gracefully (loadEffect returns -1, spawn() then no-ops)
+    // so a missing sprites/ directory just means no effects, not a crash.
+    ParticleSystem particles;
+    int fxMuzzleFlash = particles.loadEffect(wadDir + "/sprites/muzzleflash2.spr");
+    int fxSmoke = particles.loadEffect(wadDir + "/sprites/smokepuff.spr");
+    int fxExplosion = particles.loadEffect(wadDir + "/sprites/fexplo.spr");
+
     EntitySystem entities;
     entities.build(map);
     std::printf("entities: %zu spawns (CT/T), %zu bomb targets, %zu buy zones\n",
@@ -339,6 +349,7 @@ int main(int argc, char** argv) {
 
     // --- Health/death/respawn + round loop ---
     RoundState round;
+    bool bombExplosionSpawned = false; // guards the one-shot explosion particle per detonation
     bool hWasDown = false; // 'H' is a debug key to test damage/death without needing fall damage
     bool nWasDown = false; // 'N' is a debug key to test team switching
     std::srand((unsigned)SDL_GetTicks());
@@ -463,12 +474,20 @@ int main(int argc, char** argv) {
             camera.pitch = 0.0f;
             velocityZ = 0.0f;
             ammoInMag = kMagazineSize;
+            bombExplosionSpawned = false; // new round: allow the next detonation to spawn its effect
+        }
+        if (round.endReason == "BOMB_EXPLODED" && !bombExplosionSpawned) {
+            bombExplosionSpawned = true;
+            particles.spawn(fxExplosion,
+                             Vec3f{(float)round.bombPosition.x, (float)round.bombPosition.y, (float)round.bombPosition.z},
+                             1.5f, 1.2f);
         }
 
         if (player.health < lastHealth) damageFlashTimer = kDamageFlashDuration;
         lastHealth = player.health;
         if (damageFlashTimer > 0.0f) damageFlashTimer -= dt;
         if (muzzleFlashTimer > 0.0f) muzzleFlashTimer -= dt;
+        particles.update(dt);
 
         // Zone checks, driven by the real func_bomb_target/func_buyzone
         // brush bounds parsed from the map's entity lump.
@@ -561,6 +580,15 @@ int main(int argc, char** argv) {
         if (mouseDown && !mouseWasDown && ammoInMag > 0 && player.alive && !buyMenuOpen) {
             --ammoInMag;
             muzzleFlashTimer = kMuzzleFlashDuration;
+            // World-space muzzle flash particle, a little in front of the
+            // eye along the aim direction — there's no true world-space
+            // muzzle attachment point available here (the view model is
+            // drawn in its own screen-locked overlay pass, not as a real
+            // world object), so this is a close approximation rather than
+            // the exact barrel tip.
+            particles.spawn(fxMuzzleFlash,
+                             Vec3f{eye.x + forwardDir.x * 20.0f, eye.y + forwardDir.y * 20.0f, eye.z + forwardDir.z * 20.0f},
+                             0.15f, 0.06f);
             Vec3 traceStart{eye.x, eye.y, eye.z};
             constexpr float kRange = 4096.0f;
             Vec3 traceEnd{eye.x + forwardDir.x * kRange, eye.y + forwardDir.y * kRange, eye.z + forwardDir.z * kRange};
@@ -568,6 +596,7 @@ int main(int argc, char** argv) {
             if (map.traceLine(traceStart, traceEnd, hit)) {
                 if (impactMarks.size() >= kMaxImpactMarks) impactMarks.erase(impactMarks.begin());
                 impactMarks.push_back(hit);
+                particles.spawn(fxSmoke, Vec3f{(float)hit.x, (float)hit.y, (float)hit.z}, 0.35f, 0.6f);
             }
         }
         mouseWasDown = mouseDown;
@@ -611,6 +640,15 @@ int main(int argc, char** argv) {
         glEnd();
         glColor3f(1.0f, 1.0f, 1.0f);
         glEnable(GL_TEXTURE_2D);
+
+        // Particle effects: billboarded to face the real camera (not the
+        // view model's screen-locked axes), same right/up construction the
+        // main view matrix itself uses.
+        {
+            Vec3f camRight = normalize(cross(forwardDir, Vec3f{0, 0, 1}));
+            Vec3f camUp = cross(camRight, forwardDir);
+            particles.draw(camRight, camUp);
+        }
 
         if (hasViewModel) {
             // Classic FPS trick: separate (narrower) projection so the model
