@@ -16,6 +16,7 @@ add_executable(cs15engine
     src/assets/wad.cpp
     src/assets/bsp.cpp
     src/assets/mdl.cpp
+    src/assets/spr.cpp
     src/assets/tga.cpp
     src/ui/ui.cpp
     src/render/glext.cpp
@@ -50,6 +51,13 @@ add_executable(mdlbatchtest
     src/assets/mdl.cpp
 )
 target_include_directories(mdlbatchtest PRIVATE src)
+
+# Debug tool: loads a list of .spr files and reports parse pass/fail per file.
+add_executable(sprbatchtest
+    src/tools/sprbatchtest.cpp
+    src/assets/spr.cpp
+)
+target_include_directories(sprbatchtest PRIVATE src)
 
 # CS:GO-inspired main menu: Play/Watch/Inventory/Store, fictive-currency
 # case-opening economy.
