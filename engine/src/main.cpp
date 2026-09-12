@@ -1,5 +1,7 @@
 #include <SDL2/SDL.h>
 #include <GL/gl.h>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -116,10 +118,11 @@ void drawTexturedQuad(GLuint tex, float x, float y, float w, float h) {
     glDisable(GL_TEXTURE_2D);
 }
 
-void drawMdlTriangles(const MdlModel& model, const std::vector<GLuint>& texIds) {
+void drawMdlTriangles(const std::vector<MdlTriangle>& triangles, const std::vector<MdlTexture>& textures,
+                       const std::vector<GLuint>& texIds) {
     GLuint currentTex = (GLuint)-1;
     glBegin(GL_TRIANGLES);
-    for (const auto& tri : model.triangles()) {
+    for (const auto& tri : triangles) {
         GLuint texId = (tri.textureIndex >= 0 && (size_t)tri.textureIndex < texIds.size()) ? texIds[tri.textureIndex] : 0;
         if (texId != currentTex) {
             glEnd();
@@ -128,9 +131,9 @@ void drawMdlTriangles(const MdlModel& model, const std::vector<GLuint>& texIds) 
             glBegin(GL_TRIANGLES);
         }
         float texW = 64, texH = 64;
-        if (tri.textureIndex >= 0 && (size_t)tri.textureIndex < model.textures().size()) {
-            texW = (float)model.textures()[tri.textureIndex].width;
-            texH = (float)model.textures()[tri.textureIndex].height;
+        if (tri.textureIndex >= 0 && (size_t)tri.textureIndex < textures.size()) {
+            texW = (float)textures[tri.textureIndex].width;
+            texH = (float)textures[tri.textureIndex].height;
         }
         for (const MdlVertex* v : {&tri.a, &tri.b, &tri.c}) {
             glTexCoord2f(v->u / texW, v->v / texH);
@@ -278,6 +281,29 @@ int main(int argc, char** argv) {
         for (const auto& tex : viewModel.textures()) viewModelTexIds.push_back(uploadTexture(tex));
     }
 
+    // --- View model animation: idle/draw/shoot/reload sequences, played
+    // back via MdlModel::pose() instead of the static bind pose. Sequence
+    // indices are re-looked-up whenever the model changes (equipWeapon);
+    // any that's missing from a given model just stays -1 and that state
+    // silently falls back to whatever's already posed (or the bind pose,
+    // if none of them exist).
+    struct ViewAnimSeqs {
+        int idle = -1, draw = -1, shoot = -1, reload = -1;
+    };
+    enum class ViewAnimState { Idle, Draw, Shoot, Reload };
+    ViewAnimSeqs viewSeqs;
+    ViewAnimState viewAnimState = ViewAnimState::Idle;
+    float viewAnimTime = 0.0f;
+    auto lookUpViewAnimSeqs = [&]() {
+        viewSeqs.idle = viewModel.findSequence("idle1");
+        viewSeqs.draw = viewModel.findSequence("draw");
+        viewSeqs.shoot = viewModel.findSequence("shoot1");
+        viewSeqs.reload = viewModel.findSequence("reload");
+        viewAnimState = viewSeqs.draw >= 0 ? ViewAnimState::Draw : ViewAnimState::Idle;
+        viewAnimTime = 0.0f;
+    };
+    if (hasViewModel) lookUpViewAnimSeqs();
+
     // Swaps the equipped weapon: reloads the view model and its textures,
     // freeing the previous ones. Used by the buy menu.
     auto equipWeapon = [&](const std::string& modelPath) {
@@ -287,6 +313,7 @@ int main(int argc, char** argv) {
         if (hasViewModel) {
             viewModelTexIds.reserve(viewModel.textures().size());
             for (const auto& tex : viewModel.textures()) viewModelTexIds.push_back(uploadTexture(tex));
+            lookUpViewAnimSeqs();
         }
         return hasViewModel;
     };
@@ -373,6 +400,10 @@ int main(int argc, char** argv) {
                 }
             } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r) {
                 ammoInMag = kMagazineSize;
+                if (viewSeqs.reload >= 0) {
+                    viewAnimState = ViewAnimState::Reload;
+                    viewAnimTime = 0.0f;
+                }
             } else if (event.type == SDL_MOUSEMOTION && !buyMenuOpen) {
                 camera.look((float)event.motion.xrel, (float)event.motion.yrel);
             }
@@ -488,6 +519,7 @@ int main(int argc, char** argv) {
         if (damageFlashTimer > 0.0f) damageFlashTimer -= dt;
         if (muzzleFlashTimer > 0.0f) muzzleFlashTimer -= dt;
         particles.update(dt);
+        viewAnimTime += dt;
 
         // Zone checks, driven by the real func_bomb_target/func_buyzone
         // brush bounds parsed from the map's entity lump.
@@ -580,6 +612,10 @@ int main(int argc, char** argv) {
         if (mouseDown && !mouseWasDown && ammoInMag > 0 && player.alive && !buyMenuOpen) {
             --ammoInMag;
             muzzleFlashTimer = kMuzzleFlashDuration;
+            if (viewSeqs.shoot >= 0) {
+                viewAnimState = ViewAnimState::Shoot;
+                viewAnimTime = 0.0f;
+            }
             // World-space muzzle flash particle, a little in front of the
             // eye along the aim direction — there's no true world-space
             // muzzle attachment point available here (the view model is
@@ -676,7 +712,44 @@ int main(int argc, char** argv) {
             // the world-forward X axis used everywhere else — reorient once.
             glRotatef(90.0f, 0.0f, 0.0f, 1.0f);
 
-            drawMdlTriangles(viewModel, viewModelTexIds);
+            // Pick the sequence for the current animation state, falling
+            // back to the bind pose if the model has none of these at all
+            // (e.g. a prop with no sequences) — one-shot states (draw/
+            // shoot/reload) that finish revert to idle, looping ones just
+            // keep advancing.
+            int activeSeq = -1;
+            switch (viewAnimState) {
+                case ViewAnimState::Draw:   activeSeq = viewSeqs.draw; break;
+                case ViewAnimState::Shoot:  activeSeq = viewSeqs.shoot; break;
+                case ViewAnimState::Reload: activeSeq = viewSeqs.reload; break;
+                case ViewAnimState::Idle:   activeSeq = viewSeqs.idle; break;
+            }
+            std::vector<MdlTriangle> posedTriangles;
+            if (activeSeq >= 0) {
+                const MdlSequence& seq = viewModel.sequences()[activeSeq];
+                float frame = viewAnimTime * seq.fps;
+                bool finished = frame >= (float)(seq.numFrames - 1);
+                // Idle is always looped in-game regardless of the
+                // sequence's own STUDIO_LOOPING flag — GoldSrc view-model
+                // idle animations are conventionally not flagged looping
+                // in the file, but the client always loops them anyway.
+                if (seq.looping || viewAnimState == ViewAnimState::Idle) {
+                    frame = std::fmod(frame, (float)seq.numFrames);
+                } else if (finished && viewAnimState != ViewAnimState::Idle) {
+                    // One-shot animation done: drop back to idle (or the
+                    // bind pose, if this model has no idle sequence).
+                    viewAnimState = ViewAnimState::Idle;
+                    viewAnimTime = 0.0f;
+                    activeSeq = viewSeqs.idle;
+                    frame = 0.0f;
+                } else {
+                    frame = std::min(frame, (float)(seq.numFrames - 1));
+                }
+                posedTriangles = (activeSeq >= 0) ? viewModel.pose(activeSeq, frame) : viewModel.triangles();
+            } else {
+                posedTriangles = viewModel.triangles();
+            }
+            drawMdlTriangles(posedTriangles, viewModel.textures(), viewModelTexIds);
 
             // Muzzle flash: drawn at the view model's own attachment point
             // (attachment 0 — GoldSrc models rarely name these, they're

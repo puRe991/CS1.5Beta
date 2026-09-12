@@ -1,5 +1,6 @@
 #include "mdl.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -85,6 +86,51 @@ struct StudioAttachment {
     float vectors[3][3];
 };
 
+// Matches mstudioseqdesc_t (176 bytes) — only the fields playback needs are
+// named; the rest (events, pivots, per-sequence bounding box, transition
+// graph) are skipped over via padding since nothing here uses them yet.
+struct StudioSeqDesc {
+    char label[32];
+    float fps;
+    int32_t flags; // bit 0: STUDIO_LOOPING
+    int32_t activity;
+    int32_t actWeight;
+    int32_t numEvents, eventIndex;
+    int32_t numFrames;
+    int32_t numPivots, pivotIndex;
+    int32_t motionType, motionBone;
+    float linearMovement[3];
+    int32_t automoveposIndex, automoveangleIndex;
+    float bbMin[3], bbMax[3];
+    int32_t numBlends;
+    int32_t animIndex; // offset (from the sequence group's data base) to numBlends*numBones StudioAnim entries
+    int32_t blendType[2];
+    float blendStart[2], blendEnd[2];
+    int32_t blendParent;
+    int32_t seqGroup; // which mstudioseqgroup_t this sequence's data lives in — only 0 (embedded) is supported
+    int32_t entryNode, exitNode, nodeFlags;
+    int32_t nextSeq;
+};
+
+constexpr int32_t kStudioLooping = 0x0001;
+
+// mstudioanim_t: for one bone, a byte offset (relative to this struct's own
+// address) into a run of StudioAnimValue for each of 6 channels (X,Y,Z
+// position, then X,Y,Z rotation) — 0 means "not animated, use the bone's
+// static bind-pose value for this channel".
+struct StudioAnim {
+    uint16_t offset[6];
+};
+
+// RLE-compressed animation keyframe stream, decoded by extractAnimValue().
+union StudioAnimValue {
+    struct {
+        uint8_t valid; // how many raw values immediately follow this header
+        uint8_t total; // how many frames this run (valid values + held last value) covers
+    } num;
+    int16_t value;
+};
+
 constexpr int32_t kStudioNfMasked = 0x40;
 
 // 3x3 rotation + translation, composed as world = parent * local.
@@ -133,6 +179,117 @@ void apply(const BoneXform& x, float vx, float vy, float vz, float& ox, float& o
     ox = x.r[0][0]*vx + x.r[0][1]*vy + x.r[0][2]*vz + x.t[0];
     oy = x.r[1][0]*vx + x.r[1][1]*vy + x.r[1][2]*vz + x.t[1];
     oz = x.r[2][0]*vx + x.r[2][1]*vy + x.r[2][2]*vz + x.t[2];
+}
+
+// Standard GoldSrc animation-value decode (see Half-Life SDK's
+// Studio_GetAnimValue): each channel is a run-length-encoded stream of
+// (valid, total) headers followed by `valid` raw int16 values — "total"
+// frames are covered per header, with any frames beyond `valid` holding
+// the last decoded value rather than storing it again.
+int16_t extractAnimValue(const StudioAnimValue* panimvalue, int frame) {
+    int k = frame;
+    while (panimvalue->num.total <= k) {
+        k -= panimvalue->num.total;
+        panimvalue += panimvalue->num.valid + 1;
+        if (panimvalue->num.total == 0) return 0; // past the end of the stream
+    }
+    if (panimvalue->num.valid > k) {
+        return panimvalue[k + 1].value;
+    }
+    return panimvalue[panimvalue->num.valid].value;
+}
+
+// One bone's animated value[6] (position xyz, rotation xyz) at a fractional
+// frame, falling back to the bind-pose value for any channel this sequence
+// doesn't animate.
+void extractBoneFrame(const StudioBone& bone, const StudioAnim& anim, float frame, float outValue[6]) {
+    int frameA = (int)frame;
+    int frameB = frameA + 1;
+    float t = frame - (float)frameA;
+    for (int c = 0; c < 6; ++c) {
+        if (anim.offset[c] == 0) {
+            outValue[c] = bone.value[c];
+            continue;
+        }
+        const StudioAnimValue* stream = reinterpret_cast<const StudioAnimValue*>(
+            reinterpret_cast<const uint8_t*>(&anim) + anim.offset[c]);
+        float a = (float)extractAnimValue(stream, frameA);
+        float b = (float)extractAnimValue(stream, frameB);
+        outValue[c] = bone.value[c] + (a + (b - a) * t) * bone.scale[c];
+    }
+}
+
+// Shared by both the static bind pose (load()) and animated playback
+// (MdlModel::pose()) — turns a set of world-space bone transforms into the
+// flat triangle soup, re-skinning every vertex against its owning bone.
+std::vector<MdlTriangle> buildTriangles(const StudioHeader* hdr, const uint8_t* data,
+                                         const std::vector<BoneXform>& boneWorld,
+                                         const std::vector<MdlTexture>& textures) {
+    std::vector<MdlTriangle> triangles;
+    const int16_t* skinRefs = reinterpret_cast<const int16_t*>(data + hdr->skinIndex);
+    const StudioBodyPart* bodyParts = reinterpret_cast<const StudioBodyPart*>(data + hdr->bodyPartIndex);
+
+    for (int32_t bp = 0; bp < hdr->numBodyParts; ++bp) {
+        const StudioBodyPart& part = bodyParts[bp];
+        if (part.numModels <= 0) continue;
+        const StudioModel* model = reinterpret_cast<const StudioModel*>(data + part.modelIndex);
+
+        const float* verts = reinterpret_cast<const float*>(data + model->vertIndex);
+        const uint8_t* vertBoneIndex = data + model->vertInfoIndex;
+
+        std::vector<float> worldVerts(model->numVerts * 3);
+        for (int32_t v = 0; v < model->numVerts; ++v) {
+            uint8_t boneIdx = vertBoneIndex[v];
+            if (boneIdx >= boneWorld.size()) boneIdx = 0;
+            apply(boneWorld[boneIdx], verts[v*3+0], verts[v*3+1], verts[v*3+2],
+                  worldVerts[v*3+0], worldVerts[v*3+1], worldVerts[v*3+2]);
+        }
+
+        const StudioMesh* meshes = reinterpret_cast<const StudioMesh*>(data + model->meshIndex);
+        for (int32_t m = 0; m < model->numMesh; ++m) {
+            const StudioMesh& mesh = meshes[m];
+            int textureIndex = (mesh.skinRef >= 0 && mesh.skinRef < hdr->numSkinRef) ? skinRefs[mesh.skinRef] : -1;
+
+            const int16_t* cmds = reinterpret_cast<const int16_t*>(data + mesh.triIndex);
+            while (int16_t count = *cmds++) {
+                bool isStrip = count > 0;
+                int n = std::abs((int)count);
+
+                std::vector<MdlVertex> verts2;
+                verts2.reserve(n);
+                for (int i = 0; i < n; ++i) {
+                    int16_t vi = cmds[0];
+                    // cmds[1] is the normal index, unused (unlit rendering for now).
+                    int16_t s = cmds[2];
+                    int16_t t = cmds[3];
+                    cmds += 4;
+
+                    MdlVertex mv;
+                    mv.x = worldVerts[vi*3+0];
+                    mv.y = worldVerts[vi*3+1];
+                    mv.z = worldVerts[vi*3+2];
+                    mv.u = (float)s;
+                    mv.v = (float)t;
+                    verts2.push_back(mv);
+                }
+
+                for (int i = 2; i < n; ++i) {
+                    MdlTriangle tri;
+                    if (isStrip) {
+                        if (i % 2 == 0) { tri.a = verts2[i-2]; tri.b = verts2[i-1]; tri.c = verts2[i]; }
+                        else            { tri.a = verts2[i-1]; tri.b = verts2[i-2]; tri.c = verts2[i]; }
+                    } else {
+                        tri.a = verts2[0]; tri.b = verts2[i-1]; tri.c = verts2[i];
+                    }
+                    tri.textureIndex = textureIndex;
+                    triangles.push_back(tri);
+                }
+            }
+        }
+        // Only submodel 0 of each bodypart is used (the default variant).
+    }
+    (void)textures; // texture dimensions aren't needed here (u/v stay in texel units)
+    return triangles;
 }
 
 } // namespace
@@ -207,79 +364,22 @@ bool MdlModel::load(const std::string& path) {
         attachments_.push_back(std::move(att));
     }
 
-    // Skin family 0: skinref -> texture index.
-    const int16_t* skinRefs = reinterpret_cast<const int16_t*>(data.data() + hdr->skinIndex);
-
-    // --- Body parts: geometry, using submodel 0 of each (default variant) ---
-    triangles_.clear();
-    const StudioBodyPart* bodyParts = reinterpret_cast<const StudioBodyPart*>(data.data() + hdr->bodyPartIndex);
-
-    for (int32_t bp = 0; bp < hdr->numBodyParts; ++bp) {
-        const StudioBodyPart& part = bodyParts[bp];
-        if (part.numModels <= 0) continue;
-        const StudioModel* model = reinterpret_cast<const StudioModel*>(data.data() + part.modelIndex);
-
-        const float* verts = reinterpret_cast<const float*>(data.data() + model->vertIndex);
-        const uint8_t* vertBoneIndex = data.data() + model->vertInfoIndex;
-
-        std::vector<float> worldVerts(model->numVerts * 3);
-        for (int32_t v = 0; v < model->numVerts; ++v) {
-            uint8_t boneIdx = vertBoneIndex[v];
-            if (boneIdx >= boneWorld.size()) boneIdx = 0;
-            apply(boneWorld[boneIdx], verts[v*3+0], verts[v*3+1], verts[v*3+2],
-                  worldVerts[v*3+0], worldVerts[v*3+1], worldVerts[v*3+2]);
-        }
-
-        const StudioMesh* meshes = reinterpret_cast<const StudioMesh*>(data.data() + model->meshIndex);
-        for (int32_t m = 0; m < model->numMesh; ++m) {
-            const StudioMesh& mesh = meshes[m];
-            int textureIndex = (mesh.skinRef >= 0 && mesh.skinRef < hdr->numSkinRef) ? skinRefs[mesh.skinRef] : -1;
-            float texW = 1, texH = 1;
-            if (textureIndex >= 0 && (size_t)textureIndex < textures_.size()) {
-                texW = (float)textures_[textureIndex].width;
-                texH = (float)textures_[textureIndex].height;
-            }
-
-            const int16_t* cmds = reinterpret_cast<const int16_t*>(data.data() + mesh.triIndex);
-            while (int16_t count = *cmds++) {
-                bool isStrip = count > 0;
-                int n = std::abs((int)count);
-
-                std::vector<MdlVertex> verts2;
-                verts2.reserve(n);
-                for (int i = 0; i < n; ++i) {
-                    int16_t vi = cmds[0];
-                    // cmds[1] is the normal index, unused (unlit rendering for now).
-                    int16_t s = cmds[2];
-                    int16_t t = cmds[3];
-                    cmds += 4;
-
-                    MdlVertex mv;
-                    mv.x = worldVerts[vi*3+0];
-                    mv.y = worldVerts[vi*3+1];
-                    mv.z = worldVerts[vi*3+2];
-                    mv.u = (float)s;
-                    mv.v = (float)t;
-                    verts2.push_back(mv);
-                }
-
-                for (int i = 2; i < n; ++i) {
-                    MdlTriangle tri;
-                    if (isStrip) {
-                        if (i % 2 == 0) { tri.a = verts2[i-2]; tri.b = verts2[i-1]; tri.c = verts2[i]; }
-                        else            { tri.a = verts2[i-1]; tri.b = verts2[i-2]; tri.c = verts2[i]; }
-                    } else {
-                        tri.a = verts2[0]; tri.b = verts2[i-1]; tri.c = verts2[i];
-                    }
-                    tri.textureIndex = textureIndex;
-                    triangles_.push_back(tri);
-                }
-            }
-            (void)texW; (void)texH;
-        }
-        // Only submodel 0 of each bodypart is used (the default variant).
+    // --- Sequences: name/fps/frame count for playback, actual per-bone
+    // animation data is decoded on demand in pose() ---
+    sequences_.clear();
+    const StudioSeqDesc* seqDescs = reinterpret_cast<const StudioSeqDesc*>(data.data() + hdr->seqIndex);
+    for (int32_t i = 0; i < hdr->numSeq; ++i) {
+        const StudioSeqDesc& sd = seqDescs[i];
+        MdlSequence seq;
+        seq.name.assign(sd.label, strnlen(sd.label, sizeof(sd.label)));
+        seq.fps = sd.fps > 0.0f ? sd.fps : 30.0f;
+        seq.numFrames = std::max(1, sd.numFrames);
+        seq.looping = (sd.flags & kStudioLooping) != 0;
+        sequences_.push_back(std::move(seq));
     }
 
+    triangles_ = buildTriangles(hdr, data.data(), boneWorld, textures_);
+    fileData_ = std::move(data);
     return true;
 }
 
@@ -288,4 +388,42 @@ const MdlAttachment* MdlModel::findAttachment(const std::string& name) const {
         if (a.name == name) return &a;
     }
     return nullptr;
+}
+
+int MdlModel::findSequence(const std::string& name) const {
+    for (size_t i = 0; i < sequences_.size(); ++i) {
+        if (sequences_[i].name == name) return (int)i;
+    }
+    return -1;
+}
+
+std::vector<MdlTriangle> MdlModel::pose(int sequenceIndex, float frame) const {
+    if (sequenceIndex < 0 || (size_t)sequenceIndex >= sequences_.size() || fileData_.empty()) {
+        return triangles_;
+    }
+
+    const uint8_t* data = fileData_.data();
+    const StudioHeader* hdr = reinterpret_cast<const StudioHeader*>(data);
+    const StudioBone* bones = reinterpret_cast<const StudioBone*>(data + hdr->boneIndex);
+    const StudioSeqDesc& seq = reinterpret_cast<const StudioSeqDesc*>(data + hdr->seqIndex)[sequenceIndex];
+
+    // Only sequences embedded in the main file (seqgroup 0, no external
+    // demand-loaded animation blob) are supported — true of every sequence
+    // in the CS1.5 asset set this was tested against.
+    if (seq.seqGroup != 0) return triangles_;
+
+    frame = std::clamp(frame, 0.0f, (float)(seq.numFrames - 1));
+    // Only the first blend is used; multi-blend (9-way aim direction)
+    // sequences still play, just without directional blending.
+    const StudioAnim* anims = reinterpret_cast<const StudioAnim*>(data + seq.animIndex);
+
+    std::vector<BoneXform> boneWorld(hdr->numBones);
+    for (int32_t i = 0; i < hdr->numBones; ++i) {
+        float value[6];
+        extractBoneFrame(bones[i], anims[i], frame, value);
+        BoneXform local = makeLocal(value);
+        boneWorld[i] = bones[i].parent >= 0 ? compose(boneWorld[bones[i].parent], local) : local;
+    }
+
+    return buildTriangles(hdr, data, boneWorld, textures_);
 }
