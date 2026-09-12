@@ -82,11 +82,28 @@ GLuint uploadTextureRGBA(const uint8_t* rgba, uint32_t width, uint32_t height) {
     if (rgba) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
     } else {
-        uint8_t pixels[16] = {
-            255,0,255,255,  0,0,0,255,
-            0,0,0,255,      255,0,255,255,
-        };
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        // Missing texture (e.g. a base WAD this map depends on isn't
+        // present): a magenta/black checkerboard sized to the texture's
+        // own declared dimensions, not a fixed tiny swatch — a 2x2
+        // placeholder tiled with GL_REPEAT across a large face blows up
+        // into giant, screen-filling blocks that read as a rendering bug
+        // rather than a missing-asset indicator. Sized properly, it tiles
+        // at roughly the same visual density a real texture would.
+        uint32_t w = width > 0 ? width : 16;
+        uint32_t h = height > 0 ? height : 16;
+        std::vector<uint8_t> pixels((size_t)w * h * 4);
+        constexpr uint32_t kCell = 8;
+        for (uint32_t y = 0; y < h; ++y) {
+            for (uint32_t x = 0; x < w; ++x) {
+                bool dark = ((x / kCell) + (y / kCell)) % 2 == 0;
+                size_t p = ((size_t)y * w + x) * 4;
+                pixels[p + 0] = dark ? 0 : 255;
+                pixels[p + 1] = 0;
+                pixels[p + 2] = dark ? 0 : 255;
+                pixels[p + 3] = 255;
+            }
+        }
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
     }
     return id;
 }

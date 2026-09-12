@@ -251,6 +251,19 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     for (auto& t : textures_) {
         if (t.rgba.empty()) anyUnresolved = true;
     }
+
+    // "black"/"white" are plain solid-color utility textures GoldSrc maps
+    // use throughout (shadow-catcher brushes, trim, etc.) — safe to
+    // synthesize directly rather than needing them to come from a WAD,
+    // since there's nothing stylized to reproduce.
+    for (auto& t : textures_) {
+        if (!t.rgba.empty()) continue;
+        std::string lower = toLower(t.name);
+        if (lower != "black" && lower != "white") continue;
+        uint8_t channel = lower == "black" ? 0 : 255;
+        t.rgba.assign((size_t)t.width * t.height * 4, channel);
+        for (size_t p = 3; p < t.rgba.size(); p += 4) t.rgba[p] = 255; // alpha always opaque
+    }
     if (anyUnresolved && !entities_.empty()) {
         const std::string* wadKey = entities_[0].get("wad");
         std::vector<std::string> wadBaseNames;
@@ -295,6 +308,20 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
         if (df.texInfo < 0 || (size_t)df.texInfo >= numTexInfos) continue;
         const TexInfo& ti = texInfos[df.texInfo];
         if (ti.miptexIndex < 0 || (size_t)ti.miptexIndex >= textures_.size()) continue;
+
+        // Tool textures the original engine never actually renders (they
+        // exist purely for the compiler: trigger volumes, player-clip
+        // brushes, rotation origins, and the sky brush — which this engine
+        // draws separately via Skybox). Rendering them as ordinary faces
+        // would just show as "missing texture" noise for content that was
+        // never meant to be visible in the first place.
+        static const char* kNonRenderedTextures[] = {"aaatrigger", "clip", "origin", "sky", "null"};
+        std::string texName = toLower(textures_[ti.miptexIndex].name);
+        bool nonRendered = false;
+        for (const char* skip : kNonRenderedTextures) {
+            if (texName == skip) { nonRendered = true; break; }
+        }
+        if (nonRendered) continue;
 
         BspFace face;
         face.textureIndex = ti.miptexIndex;
