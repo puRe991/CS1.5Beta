@@ -132,3 +132,46 @@ bool WadFile::decodeTexture(size_t index, WadTexture& out) const {
 
     return true;
 }
+
+bool WadFile::decodeDecalTexture(size_t index, uint8_t tintR, uint8_t tintG, uint8_t tintB, WadTexture& out) const {
+    if (index >= lumps_.size()) return false;
+    const LumpInfo& lump = lumps_[index];
+
+    FILE* f = std::fopen(path_.c_str(), "rb");
+    if (!f) return false;
+
+    std::fseek(f, (long)lump.filePos, SEEK_SET);
+
+    MipTexHeader mip;
+    if (std::fread(&mip, sizeof(mip), 1, f) != 1) {
+        std::fclose(f);
+        return false;
+    }
+    if (mip.width == 0 || mip.height == 0 || mip.offsets[0] == 0) {
+        std::fclose(f);
+        return false;
+    }
+
+    // Mip level 0 pixel indices — the palette itself is skipped entirely,
+    // since a decal's palette carries no real color (see decodeDecalTexture's
+    // declaration comment): the index IS the alpha.
+    std::vector<uint8_t> indices(mip.width * mip.height);
+    std::fseek(f, (long)(lump.filePos + mip.offsets[0]), SEEK_SET);
+    bool ok = std::fread(indices.data(), 1, indices.size(), f) == indices.size();
+    std::fclose(f);
+    if (!ok) return false;
+
+    out.name.assign(mip.name, strnlen(mip.name, sizeof(mip.name)));
+    out.width = mip.width;
+    out.height = mip.height;
+    out.rgba.resize((size_t)mip.width * mip.height * 4);
+
+    for (size_t i = 0; i < indices.size(); ++i) {
+        out.rgba[i * 4 + 0] = tintR;
+        out.rgba[i * 4 + 1] = tintG;
+        out.rgba[i * 4 + 2] = tintB;
+        out.rgba[i * 4 + 3] = indices[i];
+    }
+
+    return true;
+}

@@ -15,9 +15,14 @@ constexpr int kLumpEntities = 0;
 constexpr int kLumpPlanes = 1;
 constexpr int kLumpTextures = 2;
 constexpr int kLumpVertexes = 3;
+constexpr int kLumpVisibility = 4;
+constexpr int kLumpNodes = 5;
 constexpr int kLumpTexInfo = 6;
 constexpr int kLumpFaces = 7;
+constexpr int kLumpLighting = 8;
 constexpr int kLumpClipNodes = 9;
+constexpr int kLumpLeafs = 10;
+constexpr int kLumpMarkSurfaces = 11;
 constexpr int kLumpEdges = 12;
 constexpr int kLumpSurfEdges = 13;
 constexpr int kLumpModels = 14;
@@ -79,6 +84,21 @@ struct DModel {
     int32_t headNode[4]; // one BSP tree per hull: 0=point, 1=player box, 2=large box, 3=crouch box
     int32_t visLeafs;
     int32_t firstFace, numFaces;
+};
+
+struct DNode {
+    int32_t planeNum;
+    int16_t children[2]; // negative = -(leaf index)-1
+    int16_t mins[3], maxs[3];
+    uint16_t firstFace, numFaces;
+};
+
+struct DLeaf {
+    int32_t contents;
+    int32_t visOfs; // -1 = no vis data
+    int16_t mins[3], maxs[3];
+    uint16_t firstMarkSurface, numMarkSurfaces;
+    uint8_t ambientLevels[4];
 };
 
 std::string toLower(std::string s) {
@@ -144,7 +164,8 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     }
 
     std::vector<uint8_t> entityData, texData, vertexData, texInfoData, faceData, edgeData, surfEdgeData;
-    std::vector<uint8_t> planeData, clipNodeData, modelData;
+    std::vector<uint8_t> planeData, clipNodeData, modelData, lightData;
+    std::vector<uint8_t> nodeData, leafData, markSurfaceData;
     bool ok = readLump(f, header.lumps[kLumpEntities], entityData) &&
               readLump(f, header.lumps[kLumpTextures], texData) &&
               readLump(f, header.lumps[kLumpVertexes], vertexData) &&
@@ -154,9 +175,31 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
               readLump(f, header.lumps[kLumpSurfEdges], surfEdgeData) &&
               readLump(f, header.lumps[kLumpPlanes], planeData) &&
               readLump(f, header.lumps[kLumpClipNodes], clipNodeData) &&
-              readLump(f, header.lumps[kLumpModels], modelData);
+              readLump(f, header.lumps[kLumpModels], modelData) &&
+              readLump(f, header.lumps[kLumpLighting], lightData) &&
+              readLump(f, header.lumps[kLumpNodes], nodeData) &&
+              readLump(f, header.lumps[kLumpLeafs], leafData) &&
+              readLump(f, header.lumps[kLumpMarkSurfaces], markSurfaceData) &&
+              readLump(f, header.lumps[kLumpVisibility], visData_);
     std::fclose(f);
     if (!ok) return false;
+
+    nodes_.clear();
+    for (size_t o = 0; o + sizeof(DNode) <= nodeData.size(); o += sizeof(DNode)) {
+        const DNode* n = reinterpret_cast<const DNode*>(nodeData.data() + o);
+        nodes_.push_back({n->planeNum, {n->children[0], n->children[1]}});
+    }
+
+    leafs_.clear();
+    for (size_t o = 0; o + sizeof(DLeaf) <= leafData.size(); o += sizeof(DLeaf)) {
+        const DLeaf* l = reinterpret_cast<const DLeaf*>(leafData.data() + o);
+        leafs_.push_back({l->visOfs, l->firstMarkSurface, l->numMarkSurfaces});
+    }
+
+    markSurfaces_.clear();
+    for (size_t o = 0; o + sizeof(uint16_t) <= markSurfaceData.size(); o += sizeof(uint16_t)) {
+        markSurfaces_.push_back(*reinterpret_cast<const uint16_t*>(markSurfaceData.data() + o));
+    }
 
     planes_.clear();
     for (size_t o = 0; o + sizeof(DPlane) <= planeData.size(); o += sizeof(DPlane)) {
@@ -170,7 +213,7 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
         clipNodes_.push_back({c->planeNum, {c->children[0], c->children[1]}});
     }
 
-    hull1HeadNode_ = -1;
+    for (int32_t& h : headNodes_) h = -1;
     models_.clear();
     for (size_t o = 0; o + sizeof(DModel) <= modelData.size(); o += sizeof(DModel)) {
         const DModel* m = reinterpret_cast<const DModel*>(modelData.data() + o);
@@ -179,8 +222,11 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
             Vec3{m->maxs[0], m->maxs[1], m->maxs[2]}
         });
     }
+    renderHeadNode_ = -1;
     if (!models_.empty()) {
-        hull1HeadNode_ = reinterpret_cast<const DModel*>(modelData.data())->headNode[1];
+        const DModel* worldModel = reinterpret_cast<const DModel*>(modelData.data());
+        for (int i = 0; i < 4; ++i) headNodes_[i] = worldModel->headNode[i];
+        renderHeadNode_ = worldModel->headNode[0];
     }
 
     parseEntities(std::string(entityData.begin(), entityData.end()));
@@ -249,6 +295,19 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     for (auto& t : textures_) {
         if (t.rgba.empty()) anyUnresolved = true;
     }
+
+    // "black"/"white" are plain solid-color utility textures GoldSrc maps
+    // use throughout (shadow-catcher brushes, trim, etc.) — safe to
+    // synthesize directly rather than needing them to come from a WAD,
+    // since there's nothing stylized to reproduce.
+    for (auto& t : textures_) {
+        if (!t.rgba.empty()) continue;
+        std::string lower = toLower(t.name);
+        if (lower != "black" && lower != "white") continue;
+        uint8_t channel = lower == "black" ? 0 : 255;
+        t.rgba.assign((size_t)t.width * t.height * 4, channel);
+        for (size_t p = 3; p < t.rgba.size(); p += 4) t.rgba[p] = 255; // alpha always opaque
+    }
     if (anyUnresolved && !entities_.empty()) {
         const std::string* wadKey = entities_[0].get("wad");
         std::vector<std::string> wadBaseNames;
@@ -287,6 +346,7 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     // --- Faces: build a vertex fan per face from surfedges, with UVs from texinfo ---
     faces_.clear();
     faces_.reserve(numFaces);
+    rawToCompactFace_.assign(numFaces, -1);
 
     for (size_t fi = 0; fi < numFaces; ++fi) {
         const DFace& df = faces[fi];
@@ -294,9 +354,24 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
         const TexInfo& ti = texInfos[df.texInfo];
         if (ti.miptexIndex < 0 || (size_t)ti.miptexIndex >= textures_.size()) continue;
 
+        // Tool textures the original engine never actually renders (they
+        // exist purely for the compiler: trigger volumes, player-clip
+        // brushes, rotation origins, and the sky brush — which this engine
+        // draws separately via Skybox). Rendering them as ordinary faces
+        // would just show as "missing texture" noise for content that was
+        // never meant to be visible in the first place.
+        static const char* kNonRenderedTextures[] = {"aaatrigger", "clip", "origin", "sky", "null"};
+        std::string texName = toLower(textures_[ti.miptexIndex].name);
+        bool nonRendered = false;
+        for (const char* skip : kNonRenderedTextures) {
+            if (texName == skip) { nonRendered = true; break; }
+        }
+        if (nonRendered) continue;
+
         BspFace face;
         face.textureIndex = ti.miptexIndex;
 
+        float lmMinU = 1e30f, lmMinV = 1e30f, lmMaxU = -1e30f, lmMaxV = -1e30f;
         for (int16_t e = 0; e < df.numEdges; ++e) {
             int32_t se = surfEdges[df.firstEdge + e];
             uint16_t vi = se >= 0 ? edges[se].v[0] : edges[-se].v[1];
@@ -308,14 +383,125 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
             float vcoord = v.x * ti.vecs[1][0] + v.y * ti.vecs[1][1] + v.z * ti.vecs[1][2] + ti.vecs[1][3];
             face.texCoords.push_back(u);
             face.texCoords.push_back(vcoord);
+
+            lmMinU = std::min(lmMinU, u); lmMaxU = std::max(lmMaxU, u);
+            lmMinV = std::min(lmMinV, vcoord); lmMaxV = std::max(lmMaxV, vcoord);
         }
 
-        if (face.vertices.size() >= 3) faces_.push_back(std::move(face));
+        // Lightmap: GoldSrc bakes one luxel per 16 world units. Luxel-space
+        // texcoords are the same u/v used for the base texture, just
+        // rebased to this face's own min corner and divided by 16.
+        if (!face.texCoords.empty()) {
+            constexpr float kLuxelSize = 16.0f;
+            int lmMinCellU = (int)std::floor(lmMinU / kLuxelSize);
+            int lmMinCellV = (int)std::floor(lmMinV / kLuxelSize);
+            int lmMaxCellU = (int)std::floor(lmMaxU / kLuxelSize);
+            int lmMaxCellV = (int)std::floor(lmMaxV / kLuxelSize);
+            face.lightmapWidth = (uint32_t)(lmMaxCellU - lmMinCellU + 1);
+            face.lightmapHeight = (uint32_t)(lmMaxCellV - lmMinCellV + 1);
+
+            for (size_t i = 0; i < face.texCoords.size(); i += 2) {
+                face.lightmapTexCoords.push_back(face.texCoords[i] / kLuxelSize - lmMinCellU);
+                face.lightmapTexCoords.push_back(face.texCoords[i + 1] / kLuxelSize - lmMinCellV);
+            }
+
+            size_t lightmapBytes = (size_t)face.lightmapWidth * face.lightmapHeight * 3;
+            if (df.lightOfs >= 0 && df.styles[0] != 255 &&
+                (size_t)df.lightOfs + lightmapBytes <= lightData.size()) {
+                face.lightmapRGB.assign(lightData.begin() + df.lightOfs, lightData.begin() + df.lightOfs + lightmapBytes);
+            }
+        }
+
+        if (face.vertices.size() >= 3) {
+            rawToCompactFace_[fi] = (int32_t)faces_.size();
+            faces_.push_back(std::move(face));
+        }
+    }
+
+    // --- Per-face leaf ownership, for locality-sorting PVS draw batches ---
+    faceLeaf_.assign(faces_.size(), -1);
+    for (size_t li = 0; li < leafs_.size(); ++li) {
+        const Leaf& leaf = leafs_[li];
+        for (uint32_t m = 0; m < leaf.numMarkSurfaces; ++m) {
+            size_t entry = (size_t)leaf.firstMarkSurface + m;
+            if (entry >= markSurfaces_.size()) continue;
+            uint16_t raw = markSurfaces_[entry];
+            if (raw >= rawToCompactFace_.size()) continue;
+            int32_t compact = rawToCompactFace_[raw];
+            if (compact >= 0 && faceLeaf_[compact] < 0) faceLeaf_[compact] = (int32_t)li;
+        }
     }
 
     (void)numEdges;
     (void)numSurfEdges;
     return true;
+}
+
+int32_t BspMap::findLeaf(Vec3 point) const {
+    if (renderHeadNode_ < 0 || nodes_.empty()) return -1;
+    int32_t node = renderHeadNode_;
+    while (node >= 0) {
+        const RenderNode& n = nodes_[node];
+        if (n.planeNum < 0 || (size_t)n.planeNum >= planes_.size()) return -1;
+        const Plane& pl = planes_[n.planeNum];
+        float d = pl.nx * point.x + pl.ny * point.y + pl.nz * point.z - pl.dist;
+        node = d >= 0 ? n.children[0] : n.children[1];
+    }
+    return -node - 1;
+}
+
+std::vector<bool> BspMap::computeVisibleFaces(Vec3 viewPos) const {
+    std::vector<bool> result; // empty = fallback to "draw everything"
+    if (leafs_.empty() || visData_.empty() || markSurfaces_.empty()) return result;
+
+    int32_t leafIndex = findLeaf(viewPos);
+    // Leaf 0 is always the shared "outside the world" / solid leaf and
+    // carries no PVS row — nothing meaningful to cull against, so bail out
+    // to the safe default rather than culling everything.
+    if (leafIndex <= 0 || (size_t)leafIndex >= leafs_.size()) return result;
+
+    const Leaf& viewLeaf = leafs_[leafIndex];
+    if (viewLeaf.visOfs < 0 || (size_t)viewLeaf.visOfs >= visData_.size()) return result;
+
+    // Decompress the RLE-encoded PVS row: one bit per leaf, excluding leaf
+    // 0 (bit i corresponds to leaf i+1). A zero byte means "N more zero
+    // bytes follow" (the run length is the next byte); anything else is a
+    // literal byte of bits.
+    size_t numLeafBytes = (leafs_.size() + 7) / 8;
+    std::vector<uint8_t> decompressed(numLeafBytes, 0);
+    size_t bytePos = 0;
+    size_t srcPos = (size_t)viewLeaf.visOfs;
+    while (bytePos < numLeafBytes && srcPos < visData_.size()) {
+        if (visData_[srcPos] == 0) {
+            if (srcPos + 1 >= visData_.size()) break;
+            bytePos += visData_[srcPos + 1]; // already zero-initialized
+            srcPos += 2;
+        } else {
+            decompressed[bytePos] = visData_[srcPos];
+            ++bytePos;
+            ++srcPos;
+        }
+    }
+
+    result.assign(faces_.size(), false);
+    auto markLeafFaces = [&](int32_t li) {
+        if (li <= 0 || (size_t)li >= leafs_.size()) return;
+        const Leaf& leaf = leafs_[li];
+        for (uint32_t m = 0; m < leaf.numMarkSurfaces; ++m) {
+            size_t entry = (size_t)leaf.firstMarkSurface + m;
+            if (entry >= markSurfaces_.size()) continue;
+            uint16_t raw = markSurfaces_[entry];
+            if (raw >= rawToCompactFace_.size()) continue;
+            int32_t compact = rawToCompactFace_[raw];
+            if (compact >= 0) result[compact] = true;
+        }
+    };
+    markLeafFaces(leafIndex); // always include the leaf the viewer is standing in
+    for (size_t li = 1; li < leafs_.size(); ++li) {
+        size_t bit = li - 1;
+        if ((decompressed[bit / 8] >> (bit % 8)) & 1) markLeafFaces((int32_t)li);
+    }
+    return result;
 }
 
 int BspMap::modelIndexFor(const BspEntity& ent) {
@@ -325,20 +511,36 @@ int BspMap::modelIndexFor(const BspEntity& ent) {
 }
 
 bool BspMap::pointInSolid(Vec3 point) const {
-    if (hull1HeadNode_ < 0 || clipNodes_.empty()) return false;
+    return pointInSolidHull(point, 1, nullptr);
+}
 
-    int32_t node = hull1HeadNode_;
+bool BspMap::pointInSolid(Vec3 point, Vec3& outPlaneNormal) const {
+    return pointInSolidHull(point, 1, &outPlaneNormal);
+}
+
+bool BspMap::pointInSolidHull(Vec3 point, int hull, Vec3* outPlaneNormal) const {
+    if (hull < 0 || hull > 3 || headNodes_[hull] < 0 || clipNodes_.empty()) return false;
+
+    int32_t node = headNodes_[hull];
+    Vec3 planeNormal{0, 0, 1};
     while (node >= 0) {
         const ClipNode& cn = clipNodes_[node];
         if (cn.planeNum < 0 || (size_t)cn.planeNum >= planes_.size()) return false;
         const Plane& pl = planes_[cn.planeNum];
         float d = pl.nx * point.x + pl.ny * point.y + pl.nz * point.z - pl.dist;
+        // Orient so the normal always points away from the side this step
+        // is about to descend into (the side that ultimately turns out to
+        // be solid) — the true outward surface normal, not just the
+        // plane's stored (arbitrary) direction.
+        float sign = d >= 0 ? -1.0f : 1.0f;
+        planeNormal = Vec3{pl.nx * sign, pl.ny * sign, pl.nz * sign};
         node = d >= 0 ? cn.children[0] : cn.children[1];
     }
+    if (outPlaneNormal) *outPlaneNormal = planeNormal;
     return node == kContentsSolid;
 }
 
-bool BspMap::traceLine(Vec3 start, Vec3 end, Vec3& outHit) const {
+bool BspMap::traceLine(Vec3 start, Vec3 end, Vec3& outHit, Vec3* outNormal) const {
     constexpr float kStep = 4.0f;
     float dx = end.x - start.x, dy = end.y - start.y, dz = end.z - start.z;
     float len = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -347,8 +549,10 @@ bool BspMap::traceLine(Vec3 start, Vec3 end, Vec3& outHit) const {
 
     for (float t = 0.0f; t <= len; t += kStep) {
         Vec3 p{start.x + dx * t, start.y + dy * t, start.z + dz * t};
-        if (pointInSolid(p)) {
+        Vec3 planeNormal;
+        if (pointInSolid(p, planeNormal)) {
             outHit = p;
+            if (outNormal) *outNormal = planeNormal;
             return true;
         }
     }

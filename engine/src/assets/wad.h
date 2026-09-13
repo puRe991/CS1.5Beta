@@ -24,6 +24,15 @@ public:
     // Decodes lump `index` (mip level 0) into an RGBA8 texture.
     bool decodeTexture(size_t index, WadTexture& out) const;
 
+    // Decodes lump `index` as a decal (decals.wad's "{shot*"/"{blood*"
+    // etc. lumps): unlike a masked world texture, a decal's palette isn't
+    // real color at all — it's a grayscale ramp (palette[i] is always
+    // (255-i,255-i,255-i) in every decal checked) used purely as a
+    // per-pixel alpha mask, with index 0 = fully transparent background
+    // and higher indices = more opaque. There's no color to recover from
+    // that ramp, so the caller supplies one (e.g. dark red for blood).
+    bool decodeDecalTexture(size_t index, uint8_t tintR, uint8_t tintG, uint8_t tintB, WadTexture& out) const;
+
 private:
     struct LumpInfo {
         uint32_t filePos;
