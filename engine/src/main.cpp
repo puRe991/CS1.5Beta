@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "camera.h"
+#include "console.h"
 #include "cvar.h"
 #include "mat4.h"
 #include "entities.h"
@@ -255,6 +256,7 @@ int main(int argc, char** argv) {
 
     SDL_GL_SetSwapInterval(r_vsync.AsBool() ? 1 : 0);
     SDL_SetRelativeMouseMode(SDL_TRUE);
+    SDL_StopTextInput(); // only needed while the console is open
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_TEXTURE_2D);
@@ -483,6 +485,35 @@ int main(int argc, char** argv) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
                 running = false;
+            } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_BACKQUOTE) {
+                Console::Get().Toggle();
+                if (Console::Get().IsOpen()) {
+                    SDL_StartTextInput();
+                    SDL_SetRelativeMouseMode(SDL_FALSE);
+                } else {
+                    SDL_StopTextInput();
+                    if (!buyMenuOpen) SDL_SetRelativeMouseMode(SDL_TRUE);
+                }
+            } else if (Console::Get().IsOpen()) {
+                // While the console is open, it owns all keyboard/text
+                // input — nothing below this branch should also react.
+                if (event.type == SDL_TEXTINPUT) {
+                    Console::Get().HandleTextInput(event.text.text);
+                } else if (event.type == SDL_KEYDOWN) {
+                    switch (event.key.keysym.sym) {
+                        case SDLK_BACKSPACE: Console::Get().HandleBackspace(); break;
+                        case SDLK_RETURN:
+                        case SDLK_KP_ENTER: Console::Get().HandleEnter(); break;
+                        case SDLK_UP: Console::Get().HandleHistory(-1); break;
+                        case SDLK_DOWN: Console::Get().HandleHistory(1); break;
+                        case SDLK_ESCAPE:
+                            Console::Get().Close();
+                            SDL_StopTextInput();
+                            if (!buyMenuOpen) SDL_SetRelativeMouseMode(SDL_TRUE);
+                            break;
+                        default: break;
+                    }
+                }
             } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
                 if (buyMenuOpen) {
                     buyMenuOpen = false;
@@ -503,6 +534,8 @@ int main(int argc, char** argv) {
             }
         }
 
+        if (Console::Get().WantsQuit()) running = false;
+
         Uint64 nowTicks = SDL_GetPerformanceCounter();
         float dt = (float)(nowTicks - lastTicks) / (float)SDL_GetPerformanceFrequency();
         lastTicks = nowTicks;
@@ -513,7 +546,7 @@ int main(int argc, char** argv) {
         if (keys[SDL_SCANCODE_S]) forward -= 1.0f;
         if (keys[SDL_SCANCODE_D]) strafe += 1.0f;
         if (keys[SDL_SCANCODE_A]) strafe -= 1.0f;
-        bool spaceDown = keys[SDL_SCANCODE_SPACE];
+        bool spaceDown = keys[SDL_SCANCODE_SPACE] && !Console::Get().IsOpen();
         bool jumpPressed = spaceDown && !spaceWasDown && player.alive;
         spaceWasDown = spaceDown;
 
@@ -547,12 +580,12 @@ int main(int argc, char** argv) {
         }
         nWasDown = nDown;
 
-        if (!player.alive || buyMenuOpen) { forward = 0.0f; strafe = 0.0f; }
+        if (!player.alive || buyMenuOpen || Console::Get().IsOpen()) { forward = 0.0f; strafe = 0.0f; }
 
         // Ducking: only allowed to stand back up if hull 1 (standing) isn't
         // solid at the current position — otherwise stay crouched under
         // whatever ceiling/ledge is blocking it.
-        bool duckHeld = keys[SDL_SCANCODE_LCTRL] && player.alive && !buyMenuOpen;
+        bool duckHeld = keys[SDL_SCANCODE_LCTRL] && player.alive && !buyMenuOpen && !Console::Get().IsOpen();
         if (duckHeld && !ducked) {
             ducked = true;
         } else if (!duckHeld && ducked) {
@@ -703,7 +736,7 @@ int main(int argc, char** argv) {
         for (const auto& zone : entities.bombTargets) if (pointInZone(zone, feet)) inBombsite = true;
         for (const auto& zone : entities.buyZones) if (pointInZone(zone, feet)) inBuyzone = true;
 
-        bool bDown = keys[SDL_SCANCODE_B];
+        bool bDown = keys[SDL_SCANCODE_B] && !Console::Get().IsOpen();
         if (bDown && !bWasDown) {
             if (buyMenuOpen) {
                 buyMenuOpen = false;
@@ -717,7 +750,7 @@ int main(int argc, char** argv) {
 
         // Plant/defuse: hold E. Progress resets the instant you let go, move
         // out of range, or aren't on the right team — no partial carry-over.
-        bool eHeld = keys[SDL_SCANCODE_E] && player.alive && round.phase == RoundPhase::Live && !buyMenuOpen;
+        bool eHeld = keys[SDL_SCANCODE_E] && player.alive && round.phase == RoundPhase::Live && !buyMenuOpen && !Console::Get().IsOpen();
 
         bool planting = eHeld && player.team == Team::T && !round.bombPlanted && inBombsite;
         if (planting) {
@@ -795,7 +828,7 @@ int main(int argc, char** argv) {
 
         // --- Shooting: left click fires a hitscan trace, leaves an impact mark ---
         bool mouseDown = SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON(SDL_BUTTON_LEFT);
-        if (mouseDown && !mouseWasDown && ammoInMag > 0 && player.alive && !buyMenuOpen) {
+        if (mouseDown && !mouseWasDown && ammoInMag > 0 && player.alive && !buyMenuOpen && !Console::Get().IsOpen()) {
             --ammoInMag;
             muzzleFlashTimer = kMuzzleFlashDuration;
             if (viewSeqs.shoot >= 0) {
@@ -1206,6 +1239,8 @@ int main(int argc, char** argv) {
             std::snprintf(roundLine, sizeof(roundLine), "ROUND %d", round.roundNumber);
             uiDrawText(sx + 20, sy + 168, roundLine, Color{0.6f, 0.6f, 0.6f, 1.0f}, 1.4f);
         }
+
+        Console::Get().Draw(kWidth, kHeight);
 
         uiEndFrame();
 
