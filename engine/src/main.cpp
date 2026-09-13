@@ -10,6 +10,7 @@
 #include "camera.h"
 #include "mat4.h"
 #include "entities.h"
+#include "brush_entities.h"
 #include "game_state.h"
 #include "weapons.h"
 #include "assets/bsp.h"
@@ -358,6 +359,9 @@ int main(int argc, char** argv) {
 
     EntitySystem entities;
     entities.build(map);
+
+    BrushEntitySystem brushEntities;
+    brushEntities.build(map);
     std::printf("entities: %zu spawns (CT/T), %zu bomb targets, %zu buy zones\n",
                 entities.spawns.size(), entities.bombTargets.size(), entities.buyZones.size());
 
@@ -539,7 +543,7 @@ int main(int argc, char** argv) {
             ducked = true;
         } else if (!duckHeld && ducked) {
             Vec3 standTest{camera.x, camera.y, camera.z};
-            if (!map.pointInSolidHull(standTest, 1)) ducked = false;
+            if (!map.pointInSolidHull(standTest, 1) && !brushEntities.pointInSolid(map, standTest, 1)) ducked = false;
         }
         int hull = ducked ? 3 : 1;
         float wishSpeed = kWalkSpeed * (ducked ? kCrouchSpeedScale : 1.0f);
@@ -586,20 +590,39 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Moving platforms/doors: update their state machines against the
+        // player's current AABB (touch triggers a door open / stepping on a
+        // platform's top starts its cycle), then carry the player along
+        // with whatever platform they're standing on before resolving this
+        // frame's own movement against the (possibly now-moved) geometry.
+        constexpr float kPlayerHalfWidth = 16.0f;
+        float playerHeight = ducked ? 36.0f : 72.0f;
+        Vec3 playerMins{camera.x - kPlayerHalfWidth, camera.y - kPlayerHalfWidth, camera.z};
+        Vec3 playerMaxs{camera.x + kPlayerHalfWidth, camera.y + kPlayerHalfWidth, camera.z + playerHeight};
+        Vec3 carryDelta;
+        brushEntities.update(dt, map, playerMins, playerMaxs, carryDelta);
+        camera.x += carryDelta.x;
+        camera.y += carryDelta.y;
+        camera.z += carryDelta.z;
+
         float dx = velX * dt, dy = velY * dt;
 
         // Resolve X/Y independently against the map's player hull so
         // movement slides along walls instead of stopping dead on contact.
         Vec3 candidate{camera.x, camera.y, camera.z};
         candidate.x += dx;
-        if (map.pointInSolidHull(candidate, hull)) { candidate.x = camera.x; velX = 0.0f; }
+        if (map.pointInSolidHull(candidate, hull) || brushEntities.pointInSolid(map, candidate, hull)) {
+            candidate.x = camera.x; velX = 0.0f;
+        }
         candidate.y += dy;
-        if (map.pointInSolidHull(candidate, hull)) { candidate.y = camera.y; velY = 0.0f; }
+        if (map.pointInSolidHull(candidate, hull) || brushEntities.pointInSolid(map, candidate, hull)) {
+            candidate.y = camera.y; velY = 0.0f;
+        }
 
         // Ground check: probe just below the resolved feet position.
         Vec3 groundProbe = candidate;
         groundProbe.z -= 2.0f;
-        grounded = map.pointInSolidHull(groundProbe, hull);
+        grounded = map.pointInSolidHull(groundProbe, hull) || brushEntities.pointInSolid(map, groundProbe, hull);
 
         if (jumpPressed && grounded) {
             velocityZ = kJumpSpeed;
@@ -611,7 +634,7 @@ int main(int argc, char** argv) {
         }
 
         candidate.z += velocityZ * dt;
-        if (map.pointInSolidHull(candidate, hull)) {
+        if (map.pointInSolidHull(candidate, hull) || brushEntities.pointInSolid(map, candidate, hull)) {
             if (velocityZ < 0.0f) {
                 grounded = true;
                 // Fall damage: rough approximation of the classic engines'
@@ -779,7 +802,31 @@ int main(int argc, char** argv) {
             Vec3 traceEnd{eye.x + forwardDir.x * kRange, eye.y + forwardDir.y * kRange, eye.z + forwardDir.z * kRange};
             Vec3 hit;
             Vec3 hitNormal;
-            if (map.traceLine(traceStart, traceEnd, hit, &hitNormal)) {
+            bool didHit = map.traceLine(traceStart, traceEnd, hit, &hitNormal);
+            float worldHitDist = didHit ? (hit.x - traceStart.x) * forwardDir.x +
+                                           (hit.y - traceStart.y) * forwardDir.y +
+                                           (hit.z - traceStart.z) * forwardDir.z
+                                         : kRange;
+
+            // Breakables: a separate raymarch (against the moved/still-solid
+            // brush entities, which the static traceLine above never sees)
+            // stopping at whichever comes first, world geometry or a
+            // breakable — and dealing damage to the one it actually hit.
+            constexpr float kBreakableStep = 4.0f;
+            constexpr int kBreakableBulletDamage = 50;
+            for (float t = 0.0f; t < worldHitDist; t += kBreakableStep) {
+                Vec3 p{traceStart.x + forwardDir.x * t, traceStart.y + forwardDir.y * t,
+                       traceStart.z + forwardDir.z * t};
+                if (brushEntities.pointInSolid(map, p, 0)) {
+                    brushEntities.damageAt(p, kBreakableBulletDamage);
+                    hit = p;
+                    hitNormal = Vec3{-forwardDir.x, -forwardDir.y, -forwardDir.z};
+                    didHit = true;
+                    break;
+                }
+            }
+
+            if (didHit) {
                 particles.spawn(fxSmoke, Vec3f{(float)hit.x, (float)hit.y, (float)hit.z}, 0.35f, 0.6f);
                 decals.spawn(bulletHoleDecals, Vec3f{(float)hit.x, (float)hit.y, (float)hit.z},
                              Vec3f{(float)hitNormal.x, (float)hitNormal.y, (float)hitNormal.z}, 6.0f);
@@ -814,12 +861,48 @@ int main(int argc, char** argv) {
         // eye), since that's genuinely what the frustum can see from.
         Mat4 mvp = multiply(proj, view);
         std::vector<bool> visibleFaces = map.computeVisibleFaces(Vec3{viewEye.x, viewEye.y, viewEye.z});
+        // Brush entities (doors/platforms/breakables) render themselves
+        // separately below, translated by their current offset — exclude
+        // their faces from the static world mesh's draw here so a moved
+        // door doesn't leave a copy of itself sitting at its rest position.
+        if (visibleFaces.empty()) visibleFaces.assign(map.faces().size(), true);
+        for (const auto& be : brushEntities.entities) {
+            if (be.kind == BrushKind::Breakable && be.destroyed) continue;
+            for (int fi : be.faceIndices) visibleFaces[fi] = false;
+        }
         worldShader.use();
         worldShader.setMat4("uMVP", mvp);
         worldShader.setInt("uTexture", 0);
         worldShader.setInt("uLightmap", 1);
         worldMesh.draw(worldShader, visibleFaces);
         glUseProgram(0); // back to the fixed-function pipeline for everything below
+
+        // Draw each still-intact brush entity's own faces, translated by its
+        // current offset, via the legacy fixed-function path (same as the
+        // other immediate-mode draws below) rather than reworking the
+        // shader-based world mesh's static VBO for a handful of moving
+        // pieces of geometry.
+        glEnable(GL_TEXTURE_2D);
+        for (const auto& be : brushEntities.entities) {
+            if (be.kind == BrushKind::Breakable && be.destroyed) continue;
+            glPushMatrix();
+            glTranslatef(be.offset.x, be.offset.y, be.offset.z);
+            for (int fi : be.faceIndices) {
+                const BspFace& face = map.faces()[fi];
+                if (face.textureIndex < 0 || (size_t)face.textureIndex >= texIds.size()) continue;
+                glBindTexture(GL_TEXTURE_2D, texIds[face.textureIndex]);
+                const BspTexture& tex = map.textures()[face.textureIndex];
+                glBegin(GL_TRIANGLE_FAN);
+                for (size_t vi = 0; vi < face.vertices.size(); ++vi) {
+                    float u = tex.width ? face.texCoords[vi * 2] / (float)tex.width : 0.0f;
+                    float v = tex.height ? face.texCoords[vi * 2 + 1] / (float)tex.height : 0.0f;
+                    glTexCoord2f(u, v);
+                    glVertex3f(face.vertices[vi].x, face.vertices[vi].y, face.vertices[vi].z);
+                }
+                glEnd();
+            }
+            glPopMatrix();
+        }
 
         // Decals: real bullet-hole/blood textures glued to the surfaces
         // they hit, replacing the old plain dark impact dots.

@@ -41,6 +41,12 @@ struct BspEntity {
 // index via their "model" key, formatted as "*N".
 struct BspModelBounds {
     Vec3 mins, maxs;
+    // Per-hull collision tree roots for this submodel specifically (same
+    // hull numbering as BspMap::pointInSolidHull) — lets a brush entity
+    // (func_door, func_plat, func_breakable, ...) be tested for collision
+    // on its own, independently of the worldspawn model's tree in
+    // headNodes_. -1 = no tree for that hull.
+    int32_t headNode[4] = {-1, -1, -1, -1};
 };
 
 // Parsed BSP v30 (GoldSrc) map: geometry + resolved textures + entities.
@@ -80,6 +86,15 @@ public:
     // Returns false (never solid) if the map has no data for that hull.
     bool pointInSolidHull(Vec3 point, int hull, Vec3* outPlaneNormal = nullptr) const;
 
+    // Same test, but against one specific submodel's own collision tree
+    // (models()[modelIndex].headNode) instead of the worldspawn model's.
+    // `point` must already be in that submodel's local/rest space — for a
+    // brush entity that has moved by some offset, pass (point - offset) so
+    // the test lines up with the tree's baked-at-compile-time position.
+    // Used for func_door/func_plat/func_breakable collision (see
+    // brush_entities.h), which move independently of the static world.
+    bool pointInSolidModel(Vec3 point, int modelIndex, int hull, Vec3* outPlaneNormal = nullptr) const;
+
     // Steps from start toward end (in fixed increments) until it enters solid
     // geometry or reaches the end. Returns true and sets outHit on a hit.
     // Deliberately simple (not a proper swept hull trace) — good enough for
@@ -102,6 +117,12 @@ public:
     // indexing as faces() — used to sort draw batches for locality so
     // PVS-culled ranges coalesce into fewer, larger draw calls.
     const std::vector<int32_t>& faceLeafIndices() const { return faceLeaf_; }
+
+    // Which submodel (models() index) each faces() entry belongs to, same
+    // indexing as faces() — 0 for ordinary static world geometry, >0 for
+    // faces that belong to a brush entity's model and so should be drawn
+    // with that entity's current offset instead of statically.
+    const std::vector<int32_t>& faceModelIndices() const { return faceModel_; }
 
 private:
     struct Plane {
@@ -134,8 +155,10 @@ private:
     std::vector<uint8_t> visData_;
     std::vector<int32_t> rawToCompactFace_; // raw DFace index -> faces_ index, or -1 if culled
     std::vector<int32_t> faceLeaf_;         // faces_ index -> owning leaf, or -1
+    std::vector<int32_t> faceModel_;        // faces_ index -> owning submodel (0 = world)
     int32_t renderHeadNode_ = -1;
 
     int32_t findLeaf(Vec3 point) const;
+    bool walkClipTree(Vec3 point, int32_t headNode, Vec3* outPlaneNormal) const;
     void parseEntities(const std::string& entityText);
 };
