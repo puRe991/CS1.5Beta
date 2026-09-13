@@ -213,7 +213,7 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
         clipNodes_.push_back({c->planeNum, {c->children[0], c->children[1]}});
     }
 
-    hull1HeadNode_ = -1;
+    for (int32_t& h : headNodes_) h = -1;
     models_.clear();
     for (size_t o = 0; o + sizeof(DModel) <= modelData.size(); o += sizeof(DModel)) {
         const DModel* m = reinterpret_cast<const DModel*>(modelData.data() + o);
@@ -224,8 +224,9 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     }
     renderHeadNode_ = -1;
     if (!models_.empty()) {
-        hull1HeadNode_ = reinterpret_cast<const DModel*>(modelData.data())->headNode[1];
-        renderHeadNode_ = reinterpret_cast<const DModel*>(modelData.data())->headNode[0];
+        const DModel* worldModel = reinterpret_cast<const DModel*>(modelData.data());
+        for (int i = 0; i < 4; ++i) headNodes_[i] = worldModel->headNode[i];
+        renderHeadNode_ = worldModel->headNode[0];
     }
 
     parseEntities(std::string(entityData.begin(), entityData.end()));
@@ -510,15 +511,18 @@ int BspMap::modelIndexFor(const BspEntity& ent) {
 }
 
 bool BspMap::pointInSolid(Vec3 point) const {
-    Vec3 unused;
-    return pointInSolid(point, unused);
+    return pointInSolidHull(point, 1, nullptr);
 }
 
 bool BspMap::pointInSolid(Vec3 point, Vec3& outPlaneNormal) const {
-    if (hull1HeadNode_ < 0 || clipNodes_.empty()) return false;
+    return pointInSolidHull(point, 1, &outPlaneNormal);
+}
 
-    int32_t node = hull1HeadNode_;
-    outPlaneNormal = Vec3{0, 0, 1};
+bool BspMap::pointInSolidHull(Vec3 point, int hull, Vec3* outPlaneNormal) const {
+    if (hull < 0 || hull > 3 || headNodes_[hull] < 0 || clipNodes_.empty()) return false;
+
+    int32_t node = headNodes_[hull];
+    Vec3 planeNormal{0, 0, 1};
     while (node >= 0) {
         const ClipNode& cn = clipNodes_[node];
         if (cn.planeNum < 0 || (size_t)cn.planeNum >= planes_.size()) return false;
@@ -529,9 +533,10 @@ bool BspMap::pointInSolid(Vec3 point, Vec3& outPlaneNormal) const {
         // be solid) — the true outward surface normal, not just the
         // plane's stored (arbitrary) direction.
         float sign = d >= 0 ? -1.0f : 1.0f;
-        outPlaneNormal = Vec3{pl.nx * sign, pl.ny * sign, pl.nz * sign};
+        planeNormal = Vec3{pl.nx * sign, pl.ny * sign, pl.nz * sign};
         node = d >= 0 ? cn.children[0] : cn.children[1];
     }
+    if (outPlaneNormal) *outPlaneNormal = planeNormal;
     return node == kContentsSolid;
 }
 

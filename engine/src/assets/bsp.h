@@ -69,6 +69,17 @@ public:
     // tested before reaching a solid leaf (see traceLine's outNormal).
     bool pointInSolid(Vec3 point, Vec3& outPlaneNormal) const;
 
+    // Same test against any of the map's 4 precompiled collision hulls —
+    // each hull's clipnode planes are already offset for a specific box
+    // size, so the point tested is always the same origin regardless of
+    // hull, only the effective box size changes:
+    //   0 = point (zero-size, used for tracelines)
+    //   1 = standard standing player box
+    //   2 = "large" box (bigger monsters in the original engine)
+    //   3 = crouching player box
+    // Returns false (never solid) if the map has no data for that hull.
+    bool pointInSolidHull(Vec3 point, int hull, Vec3* outPlaneNormal = nullptr) const;
+
     // Steps from start toward end (in fixed increments) until it enters solid
     // geometry or reaches the end. Returns true and sets outHit on a hit.
     // Deliberately simple (not a proper swept hull trace) — good enough for
@@ -115,7 +126,7 @@ private:
     std::vector<Plane> planes_;
     std::vector<ClipNode> clipNodes_;
     std::vector<BspModelBounds> models_;
-    int32_t hull1HeadNode_ = -1;
+    int32_t headNodes_[4] = {-1, -1, -1, -1}; // model 0's per-hull collision tree roots
 
     std::vector<RenderNode> nodes_;
     std::vector<Leaf> leafs_;

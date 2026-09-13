@@ -27,7 +27,9 @@ Requires SDL2 and OpenGL development headers (`libsdl2-dev` on Debian/Ubuntu).
 ./cs15engine <path/to/map.bsp> <path/to/cstrike-dir-with-wads> [path/to/viewmodel.mdl]
 ```
 
-Controls: WASD to move, mouse to look, Space/Ctrl for up/down, Esc to quit.
+Controls: WASD to move, mouse to look, Space to jump, Ctrl to duck, R to
+reload, V to toggle third-person, Tab for the scoreboard, B for the buy
+menu, Esc to quit.
 
 Two debug/verification tools are also built:
 - `./mapshot <map.bsp> <wad_dir> <out.bmp>` — renders one frame of a map to a file.
@@ -100,8 +102,8 @@ engine/
 
 ### Physics & Movement
 - [x] Gravity + jump + ground detection (probe-based, snaps back on floor/ceiling contact instead of clipping through) — verified against real de_dust2 geometry with logged position/velocity
-- [ ] Ducking, ground friction/acceleration curves, air control (movement is instant-velocity, not accelerated — no strafe-jumping, no "Source feel" yet)
-- [ ] Full hull-based collision for other hulls (crouching hull, large hull) — only the standard player hull is implemented
+- [x] Ducking, ground friction/acceleration curves, air control — replaced the old instant-velocity movement with persistent velocity + Quake/Source-style ground acceleration and friction (speed ramps up to and decelerates from a real max speed instead of snapping), plus a separate, much weaker air-acceleration constant for limited air control. Ctrl holds duck (switches to the crouch collision hull, halves move speed, lowers the eye height), and only stands back up once there's headroom (hull 1 isn't solid at the current position). Verified interactively (via simulated key input + a debug telemetry log): holding W ramps speed from 0 up to exactly the 250 u/s walk cap then decays back to 0 on release from ground friction; the same test while holding Ctrl caps at exactly 125 u/s (half speed, as configured); no strafe-jump speed-bunnying yet, just the acceleration/friction/air-control model itself.
+- [x] Full hull-based collision for other hulls (crouching hull, large hull) — `BspMap` now parses and exposes all 4 of the map's precompiled collision hulls (`pointInSolidHull(point, hull)`, hull 0=point/1=standing/2="large"/3=crouch) instead of hardcoding hull 1 everywhere; movement/ducking above actually switches between hull 1 and hull 3 live. Verified by scanning a vertical line through a real doorway on de_dust2: hull 1 (standing) reports solid in several z-ranges where hull 3 (crouch) reports clear — real, distinct collision geometry per hull, not just an alias. Hull 2 (large) parses and is queryable but nothing in gameplay uses it yet, since the original engine only used it for bigger monsters this project has no equivalent of.
 - [x] Line trace for hitscan (`BspMap::traceLine`) — a stepped-sampling trace, not a proper swept hull trace, so it's slightly less precise than the real engine's; fine for now, worth revisiting
 - [ ] Entity physics (moving platforms, doors, breakables)
 

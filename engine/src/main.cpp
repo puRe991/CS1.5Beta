@@ -415,6 +415,25 @@ int main(int argc, char** argv) {
     bool grounded = false;
     bool spaceWasDown = false;
 
+    // --- Ground/air movement: acceleration + friction (Quake/Source-style),
+    // instead of the old instant "position += input*speed*dt". velX/velY
+    // persist across frames so momentum actually carries between them. ---
+    constexpr float kWalkSpeed = 250.0f;      // units/sec, max ground speed
+    constexpr float kCrouchSpeedScale = 0.5f; // ducked move speed, fraction of walk speed
+    constexpr float kGroundAccel = 10.0f;     // accelerates to max speed almost immediately on ground
+    constexpr float kAirAccel = 0.7f;         // much weaker — limits mid-air steering ("air control")
+    constexpr float kGroundFriction = 6.0f;
+    constexpr float kStopSpeed = 100.0f; // below this, friction decelerates faster (a full stop, not a slide)
+    float velX = 0.0f, velY = 0.0f;
+
+    // --- Ducking: held Ctrl switches to the crouch collision hull (a
+    // shorter box) and a lower eye height + move speed. Standing back up
+    // is refused if there's no headroom (hull 1 would be solid) — same
+    // "must have room to stand" rule the original engine uses. ---
+    constexpr float kEyeHeight = 64.0f;      // eye offset above the collision origin, standing
+    constexpr float kDuckEyeHeight = 32.0f;  // ditto, ducked (shorter hull -> lower eyes)
+    bool ducked = false;
+
     // --- Weapon test state ---
     constexpr int kMagazineSize = 30;
     int ammoInMag = kMagazineSize;
@@ -512,21 +531,75 @@ int main(int argc, char** argv) {
 
         if (!player.alive || buyMenuOpen) { forward = 0.0f; strafe = 0.0f; }
 
-        float dx, dy, dzUnused;
-        camera.wishDelta(forward, strafe, 0.0f, dt, dx, dy, dzUnused);
+        // Ducking: only allowed to stand back up if hull 1 (standing) isn't
+        // solid at the current position — otherwise stay crouched under
+        // whatever ceiling/ledge is blocking it.
+        bool duckHeld = keys[SDL_SCANCODE_LCTRL] && player.alive && !buyMenuOpen;
+        if (duckHeld && !ducked) {
+            ducked = true;
+        } else if (!duckHeld && ducked) {
+            Vec3 standTest{camera.x, camera.y, camera.z};
+            if (!map.pointInSolidHull(standTest, 1)) ducked = false;
+        }
+        int hull = ducked ? 3 : 1;
+        float wishSpeed = kWalkSpeed * (ducked ? kCrouchSpeedScale : 1.0f);
+
+        // Wish direction in world space, normalized so diagonal movement
+        // isn't faster than a single direction.
+        float moveYawRad = camera.yaw * 3.14159265f / 180.0f;
+        float fx = std::cos(moveYawRad), fy = std::sin(moveYawRad);
+        float rx = -fy, ry = fx;
+        float wishX = fx * forward + rx * strafe;
+        float wishY = fy * forward + ry * strafe;
+        float wishLen = std::sqrt(wishX * wishX + wishY * wishY);
+        if (wishLen > 1e-4f) { wishX /= wishLen; wishY /= wishLen; } else { wishX = 0.0f; wishY = 0.0f; }
+
+        if (grounded) {
+            // Friction first, then accelerate toward the wish direction —
+            // below kStopSpeed, friction is applied as if already at that
+            // speed so the player actually stops instead of sliding forever.
+            float speed = std::sqrt(velX * velX + velY * velY);
+            if (speed > 1e-4f) {
+                float control = std::max(speed, kStopSpeed);
+                float drop = control * kGroundFriction * dt;
+                float scale = std::max(speed - drop, 0.0f) / speed;
+                velX *= scale;
+                velY *= scale;
+            }
+            float currentSpeed = velX * wishX + velY * wishY;
+            float addSpeed = wishSpeed - currentSpeed;
+            if (addSpeed > 0.0f) {
+                float accelSpeed = std::min(addSpeed, kGroundAccel * wishSpeed * dt);
+                velX += accelSpeed * wishX;
+                velY += accelSpeed * wishY;
+            }
+        } else {
+            // Air acceleration: same projected-speed-cap model as ground
+            // accel, just with a much weaker constant — enough to steer
+            // trajectory a little without letting players freely fly around.
+            float currentSpeed = velX * wishX + velY * wishY;
+            float addSpeed = wishSpeed - currentSpeed;
+            if (addSpeed > 0.0f) {
+                float accelSpeed = std::min(addSpeed, kAirAccel * wishSpeed * dt);
+                velX += accelSpeed * wishX;
+                velY += accelSpeed * wishY;
+            }
+        }
+
+        float dx = velX * dt, dy = velY * dt;
 
         // Resolve X/Y independently against the map's player hull so
         // movement slides along walls instead of stopping dead on contact.
         Vec3 candidate{camera.x, camera.y, camera.z};
         candidate.x += dx;
-        if (map.pointInSolid(candidate)) candidate.x = camera.x;
+        if (map.pointInSolidHull(candidate, hull)) { candidate.x = camera.x; velX = 0.0f; }
         candidate.y += dy;
-        if (map.pointInSolid(candidate)) candidate.y = camera.y;
+        if (map.pointInSolidHull(candidate, hull)) { candidate.y = camera.y; velY = 0.0f; }
 
         // Ground check: probe just below the resolved feet position.
         Vec3 groundProbe = candidate;
         groundProbe.z -= 2.0f;
-        grounded = map.pointInSolid(groundProbe);
+        grounded = map.pointInSolidHull(groundProbe, hull);
 
         if (jumpPressed && grounded) {
             velocityZ = kJumpSpeed;
@@ -538,7 +611,7 @@ int main(int argc, char** argv) {
         }
 
         candidate.z += velocityZ * dt;
-        if (map.pointInSolid(candidate)) {
+        if (map.pointInSolidHull(candidate, hull)) {
             if (velocityZ < 0.0f) {
                 grounded = true;
                 // Fall damage: rough approximation of the classic engines'
@@ -643,8 +716,9 @@ int main(int argc, char** argv) {
         debugTimer += dt;
         if (debugTimer >= 0.5f) {
             debugTimer = 0.0f;
-            std::fprintf(stderr, "t=%.1f x=%.1f y=%.1f z=%.2f hp=%d alive=%d phase=%d round=%d team=%s inBombsite=%d planted=%d bombT=%.1f plantP=%.1f defP=%.1f ctScore=%d tScore=%d endReason=%s\n",
+            std::fprintf(stderr, "t=%.1f x=%.1f y=%.1f z=%.2f velX=%.1f velY=%.1f velZ=%.1f speed=%.1f ducked=%d grounded=%d hp=%d alive=%d phase=%d round=%d team=%s inBombsite=%d planted=%d bombT=%.1f plantP=%.1f defP=%.1f ctScore=%d tScore=%d endReason=%s\n",
                          (float)SDL_GetTicks() / 1000.0f, camera.x, camera.y, camera.z,
+                         velX, velY, velocityZ, std::sqrt(velX*velX+velY*velY), (int)ducked, (int)grounded,
                          player.health, player.alive, (int)round.phase, round.roundNumber,
                          player.team == Team::CT ? "CT" : "T", inBombsite,
                          round.bombPlanted, round.bombTimer, round.plantProgress, round.defuseProgress,
@@ -659,11 +733,11 @@ int main(int argc, char** argv) {
 
         Mat4 proj = perspective(90.0f, (float)kWidth / kHeight, 4.0f, 8192.0f);
 
-        constexpr float kEyeHeight = 64.0f; // eye offset above the collision origin
+        float eyeHeight = ducked ? kDuckEyeHeight : kEyeHeight;
 
         float yawRad = camera.yaw * 3.14159265f / 180.0f;
         float pitchRad = camera.pitch * 3.14159265f / 180.0f;
-        Vec3f eye{camera.x, camera.y, camera.z + kEyeHeight};
+        Vec3f eye{camera.x, camera.y, camera.z + eyeHeight};
         Vec3f forwardDir{
             std::cos(yawRad) * std::cos(pitchRad),
             std::sin(yawRad) * std::cos(pitchRad),
