@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "camera.h"
+#include "cvar.h"
 #include "mat4.h"
 #include "entities.h"
 #include "brush_entities.h"
@@ -164,7 +165,20 @@ void drawMdlTriangles(const std::vector<MdlTriangle>& triangles, const std::vect
 
 } // namespace
 
+// --- Config/cvar system ---
+// GoldSrc-style named settings (engine/src/cvar.h). "config.cfg" lives next
+// to wherever the executable is run from; ARCHIVE cvars round-trip through
+// it (loaded at startup, written back on exit), everything else is
+// runtime-only. Add new user-facing settings here rather than hardcoding
+// them, so they're automatically persisted and editable without a rebuild.
+static Cvar cl_fov("fov", "90", CVAR_ARCHIVE, "horizontal-ish field of view, degrees");
+static Cvar r_width("width", "1280", CVAR_ARCHIVE, "window width in pixels");
+static Cvar r_height("height", "720", CVAR_ARCHIVE, "window height in pixels");
+static Cvar r_vsync("vsync", "1", CVAR_ARCHIVE, "1 = vsync on, 0 = off");
+static const char* kConfigPath = "config.cfg";
+
 int main(int argc, char** argv) {
+    CvarSystem::Get().LoadConfig(kConfigPath);
     if (argc < 3) {
         std::fprintf(stderr, "usage: %s <map.bsp> <wad_dir> [viewmodel.mdl] [screenshot_out.bmp]\n", argv[0]);
         return 1;
@@ -218,7 +232,7 @@ int main(int argc, char** argv) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
-    const int kWidth = 1280, kHeight = 720;
+    const int kWidth = r_width.AsInt(), kHeight = r_height.AsInt();
     SDL_Window* window = SDL_CreateWindow(
         "cs15engine",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -239,7 +253,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    SDL_GL_SetSwapInterval(1); // vsync
+    SDL_GL_SetSwapInterval(r_vsync.AsBool() ? 1 : 0);
     SDL_SetRelativeMouseMode(SDL_TRUE);
 
     glEnable(GL_DEPTH_TEST);
@@ -754,7 +768,7 @@ int main(int argc, char** argv) {
         glClearColor(0.4f, 0.6f, 0.9f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        Mat4 proj = perspective(90.0f, (float)kWidth / kHeight, 4.0f, 8192.0f);
+        Mat4 proj = perspective(cl_fov.AsFloat(), (float)kWidth / kHeight, 4.0f, 8192.0f);
 
         float eyeHeight = ducked ? kDuckEyeHeight : kEyeHeight;
 
@@ -1210,6 +1224,8 @@ int main(int argc, char** argv) {
             running = false; // one-shot verification run
         }
     }
+
+    CvarSystem::Get().SaveConfig(kConfigPath);
 
     SDL_GL_DeleteContext(glContext);
     SDL_DestroyWindow(window);
