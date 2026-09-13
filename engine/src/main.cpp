@@ -10,6 +10,7 @@
 #include "camera.h"
 #include "console.h"
 #include "cvar.h"
+#include "settings.h"
 #include "mat4.h"
 #include "entities.h"
 #include "brush_entities.h"
@@ -78,8 +79,9 @@ GLuint uploadTextureRGBA(const uint8_t* rgba, uint32_t width, uint32_t height) {
     GLuint id = 0;
     glGenTextures(1, &id);
     glBindTexture(GL_TEXTURE_2D, id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    GLint filter = r_texfilter.AsBool() ? GL_LINEAR : GL_NEAREST;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
@@ -110,6 +112,36 @@ GLuint uploadTextureRGBA(const uint8_t* rgba, uint32_t width, uint32_t height) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
     }
     return id;
+}
+
+// Crosshair, fully driven by the cl_crosshair_* cvars set from the Settings
+// screen: color, size, thickness, gap, optional outline/center dot, and an
+// optional "dynamic" gap that widens with extraGapPixels (movement speed).
+void drawCrosshair(float centerX, float centerY, float extraGapPixels) {
+    Color color{
+        std::clamp(cl_crosshair_r.AsFloat() / 255.0f, 0.0f, 1.0f),
+        std::clamp(cl_crosshair_g.AsFloat() / 255.0f, 0.0f, 1.0f),
+        std::clamp(cl_crosshair_b.AsFloat() / 255.0f, 0.0f, 1.0f),
+        1.0f,
+    };
+    float size = std::max(1.0f, cl_crosshair_size.AsFloat());
+    float thickness = std::max(1.0f, cl_crosshair_thickness.AsFloat());
+    float gap = std::max(0.0f, cl_crosshair_gap.AsFloat());
+    if (cl_crosshair_dynamic.AsBool()) gap += extraGapPixels;
+    bool outline = cl_crosshair_outline.AsBool();
+
+    auto drawLine = [&](float x, float y, float w, float h) {
+        if (outline) uiDrawRect(x - 1, y - 1, w + 2, h + 2, kColorBlack);
+        uiDrawRect(x, y, w, h, color);
+    };
+    // Four legs (up/down/left/right), each `size` long starting `gap` away from center.
+    drawLine(centerX - thickness / 2.0f, centerY - gap - size, thickness, size);
+    drawLine(centerX - thickness / 2.0f, centerY + gap, thickness, size);
+    drawLine(centerX - gap - size, centerY - thickness / 2.0f, size, thickness);
+    drawLine(centerX + gap, centerY - thickness / 2.0f, size, thickness);
+    if (cl_crosshair_dot.AsBool()) {
+        drawLine(centerX - thickness / 2.0f, centerY - thickness / 2.0f, thickness, thickness);
+    }
 }
 
 GLuint uploadTexture(const BspTexture& tex) {
@@ -167,19 +199,12 @@ void drawMdlTriangles(const std::vector<MdlTriangle>& triangles, const std::vect
 } // namespace
 
 // --- Config/cvar system ---
-// GoldSrc-style named settings (engine/src/cvar.h). "config.cfg" lives next
-// to wherever the executable is run from; ARCHIVE cvars round-trip through
-// it (loaded at startup, written back on exit), everything else is
-// runtime-only. Add new user-facing settings here rather than hardcoding
-// them, so they're automatically persisted and editable without a rebuild.
-static Cvar cl_fov("fov", "90", CVAR_ARCHIVE, "horizontal-ish field of view, degrees");
-static Cvar r_width("width", "1280", CVAR_ARCHIVE, "window width in pixels");
-static Cvar r_height("height", "720", CVAR_ARCHIVE, "window height in pixels");
-static Cvar r_vsync("vsync", "1", CVAR_ARCHIVE, "1 = vsync on, 0 = off");
-static const char* kConfigPath = "config.cfg";
-
+// GoldSrc-style named settings (engine/src/cvar.h, engine/src/settings.h).
+// "config.cfg" lives next to wherever the executable is run from; ARCHIVE
+// cvars round-trip through it (loaded at startup, written back on exit) and
+// are shared with the csmenu Settings screen, which writes the same file.
 int main(int argc, char** argv) {
-    CvarSystem::Get().LoadConfig(kConfigPath);
+    SettingsLoad();
     if (argc < 3) {
         std::fprintf(stderr, "usage: %s <map.bsp> <wad_dir> [viewmodel.mdl] [screenshot_out.bmp]\n", argv[0]);
         return 1;
@@ -232,13 +257,20 @@ int main(int argc, char** argv) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+    int msaaSamples = r_msaa.AsInt();
+    if (msaaSamples > 0) {
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, msaaSamples);
+    }
 
     const int kWidth = r_width.AsInt(), kHeight = r_height.AsInt();
+    Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN;
+    if (r_fullscreen.AsBool()) windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
     SDL_Window* window = SDL_CreateWindow(
         "cs15engine",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         kWidth, kHeight,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN
+        windowFlags
     );
     if (!window) {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -255,11 +287,16 @@ int main(int argc, char** argv) {
     }
 
     SDL_GL_SetSwapInterval(r_vsync.AsBool() ? 1 : 0);
+    // Raw input bypasses the OS pointer-acceleration/scaling curve so the
+    // "sensitivity" cvar behaves the same on every machine; must be set
+    // before enabling relative mouse mode.
+    SDL_SetHintWithPriority(SDL_HINT_MOUSE_RELATIVE_MODE_WARP, m_rawinput.AsBool() ? "0" : "1", SDL_HINT_OVERRIDE);
     SDL_SetRelativeMouseMode(SDL_TRUE);
     SDL_StopTextInput(); // only needed while the console is open
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_TEXTURE_2D);
+    if (msaaSamples > 0) glEnable(GL_MULTISAMPLE);
 
     if (!loadGLExtensions()) {
         std::fprintf(stderr, "failed to load GL shader/VBO extensions\n");
@@ -481,6 +518,13 @@ int main(int argc, char** argv) {
     std::string currentWeaponName = "AK47";
 
     while (running) {
+        // Aim-down-sights: right mouse button held scales mouse sensitivity
+        // (m_ads_sensitivity) and narrows the FOV, same as the ADS scoping
+        // real CS-derived engines do, gated on the same "input is free" set
+        // of conditions as the rest of gameplay input below.
+        bool adsHeld = (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0 &&
+                       player.alive && !buyMenuOpen && !Console::Get().IsOpen();
+
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
@@ -521,16 +565,17 @@ int main(int argc, char** argv) {
                 } else {
                     running = false;
                 }
-            } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r) {
+            } else if (event.type == SDL_KEYDOWN && event.key.keysym.scancode == SettingsScancodeFor(bind_reload, SDL_SCANCODE_R)) {
                 ammoInMag = kMagazineSize;
                 if (viewSeqs.reload >= 0) {
                     viewAnimState = ViewAnimState::Reload;
                     viewAnimTime = 0.0f;
                 }
-            } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_v) {
+            } else if (event.type == SDL_KEYDOWN && event.key.keysym.scancode == SettingsScancodeFor(bind_thirdperson, SDL_SCANCODE_V)) {
                 thirdPerson = !thirdPerson;
             } else if (event.type == SDL_MOUSEMOTION && !buyMenuOpen) {
-                camera.look((float)event.motion.xrel, (float)event.motion.yrel);
+                bool adsActive = adsHeld;
+                camera.look((float)event.motion.xrel, (float)event.motion.yrel, adsActive ? m_ads_sensitivity.AsFloat() : 1.0f);
             }
         }
 
@@ -542,11 +587,11 @@ int main(int argc, char** argv) {
 
         const Uint8* keys = SDL_GetKeyboardState(nullptr);
         float forward = 0.0f, strafe = 0.0f;
-        if (keys[SDL_SCANCODE_W]) forward += 1.0f;
-        if (keys[SDL_SCANCODE_S]) forward -= 1.0f;
-        if (keys[SDL_SCANCODE_D]) strafe += 1.0f;
-        if (keys[SDL_SCANCODE_A]) strafe -= 1.0f;
-        bool spaceDown = keys[SDL_SCANCODE_SPACE] && !Console::Get().IsOpen();
+        if (keys[SettingsScancodeFor(bind_forward, SDL_SCANCODE_W)]) forward += 1.0f;
+        if (keys[SettingsScancodeFor(bind_back, SDL_SCANCODE_S)]) forward -= 1.0f;
+        if (keys[SettingsScancodeFor(bind_right, SDL_SCANCODE_D)]) strafe += 1.0f;
+        if (keys[SettingsScancodeFor(bind_left, SDL_SCANCODE_A)]) strafe -= 1.0f;
+        bool spaceDown = keys[SettingsScancodeFor(bind_jump, SDL_SCANCODE_SPACE)] && !Console::Get().IsOpen();
         bool jumpPressed = spaceDown && !spaceWasDown && player.alive;
         spaceWasDown = spaceDown;
 
@@ -585,7 +630,7 @@ int main(int argc, char** argv) {
         // Ducking: only allowed to stand back up if hull 1 (standing) isn't
         // solid at the current position — otherwise stay crouched under
         // whatever ceiling/ledge is blocking it.
-        bool duckHeld = keys[SDL_SCANCODE_LCTRL] && player.alive && !buyMenuOpen && !Console::Get().IsOpen();
+        bool duckHeld = keys[SettingsScancodeFor(bind_duck, SDL_SCANCODE_LCTRL)] && player.alive && !buyMenuOpen && !Console::Get().IsOpen();
         if (duckHeld && !ducked) {
             ducked = true;
         } else if (!duckHeld && ducked) {
@@ -736,7 +781,7 @@ int main(int argc, char** argv) {
         for (const auto& zone : entities.bombTargets) if (pointInZone(zone, feet)) inBombsite = true;
         for (const auto& zone : entities.buyZones) if (pointInZone(zone, feet)) inBuyzone = true;
 
-        bool bDown = keys[SDL_SCANCODE_B] && !Console::Get().IsOpen();
+        bool bDown = keys[SettingsScancodeFor(bind_buymenu, SDL_SCANCODE_B)] && !Console::Get().IsOpen();
         if (bDown && !bWasDown) {
             if (buyMenuOpen) {
                 buyMenuOpen = false;
@@ -750,7 +795,7 @@ int main(int argc, char** argv) {
 
         // Plant/defuse: hold E. Progress resets the instant you let go, move
         // out of range, or aren't on the right team — no partial carry-over.
-        bool eHeld = keys[SDL_SCANCODE_E] && player.alive && round.phase == RoundPhase::Live && !buyMenuOpen && !Console::Get().IsOpen();
+        bool eHeld = keys[SettingsScancodeFor(bind_use, SDL_SCANCODE_E)] && player.alive && round.phase == RoundPhase::Live && !buyMenuOpen && !Console::Get().IsOpen();
 
         bool planting = eHeld && player.team == Team::T && !round.bombPlanted && inBombsite;
         if (planting) {
@@ -801,7 +846,8 @@ int main(int argc, char** argv) {
         glClearColor(0.4f, 0.6f, 0.9f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        Mat4 proj = perspective(cl_fov.AsFloat(), (float)kWidth / kHeight, 4.0f, 8192.0f);
+        float effectiveFov = adsHeld ? cl_fov.AsFloat() * 0.6f : cl_fov.AsFloat();
+        Mat4 proj = perspective(effectiveFov, (float)kWidth / kHeight, 4.0f, 8192.0f);
 
         float eyeHeight = ducked ? kDuckEyeHeight : kEyeHeight;
 
@@ -1095,9 +1141,9 @@ int main(int argc, char** argv) {
             uiDrawRect(0, 0, kWidth, kHeight, Color{0.8f, 0.0f, 0.0f, alpha});
         }
 
-        float cx = kWidth / 2.0f, cy = kHeight / 2.0f;
-        uiDrawRect(cx - 8, cy - 1, 16, 2, kColorWhite);
-        uiDrawRect(cx - 1, cy - 8, 2, 16, kColorWhite);
+        float hudCx = kWidth / 2.0f, hudCy = kHeight / 2.0f;
+        float moveSpeed = std::sqrt(forward * forward + strafe * strafe);
+        drawCrosshair(hudCx, hudCy, moveSpeed * 6.0f);
         char ammoStr[32];
         std::snprintf(ammoStr, sizeof(ammoStr), "%d / %d", ammoInMag, kMagazineSize);
         uiDrawText(kWidth - uiTextWidth(ammoStr, 2.5f) - 24, kHeight - 48, ammoStr, kColorWhite, 2.5f);
@@ -1216,7 +1262,7 @@ int main(int argc, char** argv) {
         }
 
         // --- Scoreboard (hold Tab) ---
-        if (keys[SDL_SCANCODE_TAB]) {
+        if (keys[SettingsScancodeFor(bind_scoreboard, SDL_SCANCODE_TAB)]) {
             float sx = kWidth / 2.0f - 220, sy = 140, sw = 440;
             uiDrawRect(sx, sy, sw, 200, Color{0, 0, 0, 0.75f});
             uiDrawText(sx + (sw - uiTextWidth("SCOREBOARD", 2.0f)) / 2.0f, sy + 12, "SCOREBOARD", kColorWhite, 2.0f);
@@ -1246,6 +1292,15 @@ int main(int argc, char** argv) {
 
         SDL_GL_SwapWindow(window);
 
+        int fpsCap = r_fpscap.AsInt();
+        if (fpsCap > 0) {
+            float targetFrameSeconds = 1.0f / (float)fpsCap;
+            float elapsed = (float)(SDL_GetPerformanceCounter() - nowTicks) / (float)SDL_GetPerformanceFrequency();
+            if (elapsed < targetFrameSeconds) {
+                SDL_Delay((Uint32)((targetFrameSeconds - elapsed) * 1000.0f));
+            }
+        }
+
         if (!screenshotPath.empty()) {
             std::vector<uint8_t> pixels(kWidth * kHeight * 3);
             glReadPixels(0, 0, kWidth, kHeight, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
@@ -1260,7 +1315,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    CvarSystem::Get().SaveConfig(kConfigPath);
+    SettingsSave();
 
     SDL_GL_DeleteContext(glContext);
     SDL_DestroyWindow(window);

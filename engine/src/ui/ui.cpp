@@ -9,6 +9,7 @@ int g_mouseX = 0, g_mouseY = 0;
 bool g_mouseDown = false;
 bool g_mouseWasDown = false;
 int g_screenW = 1, g_screenH = 1;
+const void* g_activeSlider = nullptr; // identity of the float* currently being dragged, if any
 } // namespace
 
 void uiBeginFrame(int mouseX, int mouseY, bool mouseDown, int screenW, int screenH) {
@@ -102,4 +103,37 @@ bool uiButton(float x, float y, float w, float h, const std::string& label, Colo
     uiDrawText(x + (w - textW) / 2.0f, y + (h - 7.0f * 2.0f) / 2.0f, label, fg);
 
     return hovered && g_mouseDown && !g_mouseWasDown;
+}
+
+bool uiSlider(float x, float y, float w, float h, float* value, float minV, float maxV, const std::string& label) {
+    bool hovered = uiMouseInRect(x, y, w, h);
+    if (g_mouseDown && !g_mouseWasDown && hovered) g_activeSlider = value;
+    if (!g_mouseDown && g_activeSlider == value) g_activeSlider = nullptr;
+
+    bool changed = false;
+    if (g_activeSlider == value) {
+        float t = std::clamp((g_mouseX - x) / w, 0.0f, 1.0f);
+        float newValue = minV + t * (maxV - minV);
+        if (newValue != *value) changed = true;
+        *value = newValue;
+    }
+
+    if (!label.empty()) uiDrawText(x, y - 16, label, kColorWhite, 1.2f);
+    uiDrawRect(x, y, w, h, Color{0.15f, 0.15f, 0.18f, 1.0f});
+    float fillT = std::clamp((*value - minV) / (maxV - minV), 0.0f, 1.0f);
+    uiDrawRect(x, y, w * fillT, h, Color{0.8f, 0.5f, 0.15f, 1.0f});
+    uiDrawRectOutline(x, y, w, h, Color{0, 0, 0, 0.6f});
+    // Handle.
+    uiDrawRect(x + w * fillT - 3, y - 3, 6, h + 6, kColorWhite);
+
+    return changed;
+}
+
+bool uiToggle(float x, float y, float w, float h, bool* value, const std::string& labelOn, const std::string& labelOff) {
+    Color bg = *value ? Color{0.15f, 0.55f, 0.2f, 1.0f} : Color{0.4f, 0.15f, 0.15f, 1.0f};
+    if (uiButton(x, y, w, h, *value ? labelOn : labelOff, bg)) {
+        *value = !*value;
+        return true;
+    }
+    return false;
 }

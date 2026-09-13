@@ -41,9 +41,19 @@ The main menu is a separate executable for now (see below):
 ./csmenu <path/to/cstrike/models>
 ```
 
-Click PLAY/WATCH/INVENTORY/STORE to switch screens; buy a case in the Store,
-then open it from the Inventory. All currency is fictive — no real payments,
-no Steam integration.
+Click PLAY/WATCH/INVENTORY/STORE/SETTINGS to switch screens; buy a case in
+the Store, then open it from the Inventory. All currency is fictive — no
+real payments, no Steam integration.
+
+The SETTINGS screen covers video (resolution, fullscreen, vsync, FPS cap,
+texture filtering, MSAA, particle quality, plus reserved shadows/AO cvars
+for a future renderer pass), audio (master/music/effects/voice/UI volume
+cvars, reserved until an audio backend exists), full key rebinding, mouse
+(sensitivity, ADS sensitivity, invert, raw input, acceleration), and
+crosshair customization (color, size, thickness, gap, outline, dot,
+dynamic/static) with a live preview. It writes `config.cfg` next to the
+executable, the same file `cs15engine` loads on startup, so changes take
+effect the next time a map is launched.
 
 ## Architecture
 

@@ -6,7 +6,9 @@
 #include <GL/gl.h>
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -19,10 +21,12 @@
 #include "ui/ui.h"
 #include "inventory.h"
 #include "assets/mdl.h"
+#include "settings.h"
 
 namespace {
 
-enum class Screen { Play, Watch, Inventory, Store, CaseOpening };
+enum class Screen { Play, Watch, Inventory, Store, Settings, CaseOpening };
+enum class SettingsTab { Video, Audio, Controls, Mouse, Crosshair };
 
 // Loads a weapon's base world-model texture once per weapon name and hands
 // back a GL texture id tinted per skin, cached by skin name.
@@ -141,6 +145,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::srand((unsigned)std::time(nullptr));
+    SettingsLoad();
     std::string cstrikeDir = argv[1];
     std::string modelsDir = cstrikeDir + "/models";
     std::string menuExeDir = exeDir(argv[0]);
@@ -177,6 +182,8 @@ int main(int argc, char** argv) {
     }
 
     Screen screen = Screen::Inventory;
+    SettingsTab settingsTab = SettingsTab::Video;
+    Cvar* awaitingBind = nullptr; // non-null while the next keypress should be captured as a rebind
     std::string selectedMap = maps.empty() ? "" : maps[0];
     const CaseDef* openingCase = nullptr;
     OwnedSkin revealResult;
@@ -191,6 +198,7 @@ int main(int argc, char** argv) {
     if (screenshotScreen == "inventory") screen = Screen::Inventory;
     if (screenshotScreen == "play") screen = Screen::Play;
     if (screenshotScreen == "watch") screen = Screen::Watch;
+    if (screenshotScreen == "settings") screen = Screen::Settings;
     if (screenshotScreen == "caseopen_spin" && !cases.empty()) {
         openingCase = &cases[0];
         screen = Screen::CaseOpening;
@@ -214,6 +222,17 @@ int main(int argc, char** argv) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) running = false;
+            if (awaitingBind) {
+                // Capturing the next physical key for a rebind: anything but
+                // Escape (which cancels) is stored as this bind's new key.
+                if (event.type == SDL_KEYDOWN) {
+                    if (event.key.keysym.sym != SDLK_ESCAPE) {
+                        awaitingBind->SetString(SDL_GetScancodeName(event.key.keysym.scancode));
+                    }
+                    awaitingBind = nullptr;
+                }
+                continue;
+            }
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) running = false;
         }
 
@@ -233,7 +252,7 @@ int main(int argc, char** argv) {
         uiDrawRect(0, 0, kWidth, 64, kNavBg);
 
         struct Tab { const char* label; Screen s; };
-        Tab tabs[] = {{"PLAY", Screen::Play}, {"WATCH", Screen::Watch}, {"INVENTORY", Screen::Inventory}, {"STORE", Screen::Store}};
+        Tab tabs[] = {{"PLAY", Screen::Play}, {"WATCH", Screen::Watch}, {"INVENTORY", Screen::Inventory}, {"STORE", Screen::Store}, {"SETTINGS", Screen::Settings}};
         float tabX = 24;
         for (auto& t : tabs) {
             float w = uiTextWidth(t.label) + 32;
@@ -353,6 +372,274 @@ int main(int argc, char** argv) {
                 cx += 276;
             }
 
+        } else if (screen == Screen::Settings) {
+            uiDrawText(24, 84, "SETTINGS", kColorWhite, 3.0f);
+
+            struct STab { const char* label; SettingsTab t; };
+            STab stabs[] = {
+                {"VIDEO", SettingsTab::Video}, {"AUDIO", SettingsTab::Audio},
+                {"CONTROLS", SettingsTab::Controls}, {"MOUSE", SettingsTab::Mouse},
+                {"CROSSHAIR", SettingsTab::Crosshair},
+            };
+            float stx = 24;
+            for (auto& st : stabs) {
+                float w = uiTextWidth(st.label, 1.4f) + 24;
+                Color bg = (settingsTab == st.t) ? Color{0.7f, 0.3f, 0.1f, 1.0f} : Color{0.15f, 0.16f, 0.2f, 1.0f};
+                if (uiButton(stx, 120, w, 32, st.label, bg)) settingsTab = st.t;
+                stx += w + 6;
+            }
+
+            const float kLabelX = 24, kCtrlX = 260, kRowH = 46;
+            float ry = 190;
+            bool changed = false;
+
+            auto row = [&](const char* label) {
+                uiDrawText(kLabelX, ry + 8, label, Color{0.8f, 0.8f, 0.8f, 1.0f}, 1.3f);
+                float y = ry;
+                ry += kRowH;
+                return y;
+            };
+
+            if (settingsTab == SettingsTab::Video) {
+                struct Res { int w, h; };
+                static const Res kResolutions[] = {{1024, 768}, {1280, 720}, {1366, 768}, {1600, 900}, {1920, 1080}, {2560, 1440}};
+                int resIdx = 1;
+                for (size_t i = 0; i < std::size(kResolutions); ++i) {
+                    if (kResolutions[i].w == r_width.AsInt() && kResolutions[i].h == r_height.AsInt()) resIdx = (int)i;
+                }
+                {
+                    float y = row("RESOLUTION");
+                    char resStr[32];
+                    std::snprintf(resStr, sizeof(resStr), "%d x %d", kResolutions[resIdx].w, kResolutions[resIdx].h);
+                    if (uiButton(kCtrlX, y, 32, 32, "<", Color{0.2f, 0.2f, 0.24f, 1.0f})) {
+                        resIdx = (resIdx - 1 + (int)std::size(kResolutions)) % (int)std::size(kResolutions);
+                        r_width.SetFloat((float)kResolutions[resIdx].w);
+                        r_height.SetFloat((float)kResolutions[resIdx].h);
+                        changed = true;
+                    }
+                    uiDrawText(kCtrlX + 42, y + 8, resStr, kColorWhite, 1.4f);
+                    if (uiButton(kCtrlX + 180, y, 32, 32, ">", Color{0.2f, 0.2f, 0.24f, 1.0f})) {
+                        resIdx = (resIdx + 1) % (int)std::size(kResolutions);
+                        r_width.SetFloat((float)kResolutions[resIdx].w);
+                        r_height.SetFloat((float)kResolutions[resIdx].h);
+                        changed = true;
+                    }
+                }
+                {
+                    float y = row("FULLSCREEN");
+                    bool fs = r_fullscreen.AsBool();
+                    if (uiToggle(kCtrlX, y, 140, 32, &fs, "ON", "OFF")) { r_fullscreen.SetFloat(fs ? 1.0f : 0.0f); changed = true; }
+                }
+                {
+                    float y = row("VSYNC");
+                    bool vs = r_vsync.AsBool();
+                    if (uiToggle(kCtrlX, y, 140, 32, &vs, "ON", "OFF")) { r_vsync.SetFloat(vs ? 1.0f : 0.0f); changed = true; }
+                }
+                {
+                    float y = row("FPS CAP");
+                    float v = r_fpscap.AsFloat();
+                    if (uiSlider(kCtrlX, y + 8, 260, 16, &v, 0.0f, 300.0f, "")) { r_fpscap.SetFloat(std::round(v)); changed = true; }
+                    char s[16];
+                    if (r_fpscap.AsInt() > 0) std::snprintf(s, sizeof(s), "%d", r_fpscap.AsInt());
+                    else std::snprintf(s, sizeof(s), "UNCAPPED");
+                    uiDrawText(kCtrlX + 276, y + 4, s, kColorWhite, 1.2f);
+                }
+                {
+                    float y = row("FIELD OF VIEW");
+                    float v = cl_fov.AsFloat();
+                    if (uiSlider(kCtrlX, y + 8, 260, 16, &v, 60.0f, 110.0f, "")) { cl_fov.SetFloat(std::round(v)); changed = true; }
+                    char s[16]; std::snprintf(s, sizeof(s), "%d", cl_fov.AsInt());
+                    uiDrawText(kCtrlX + 276, y + 4, s, kColorWhite, 1.2f);
+                }
+                {
+                    float y = row("TEXTURE FILTER");
+                    bool linear = r_texfilter.AsBool();
+                    if (uiToggle(kCtrlX, y, 160, 32, &linear, "SMOOTH", "PIXELATED")) { r_texfilter.SetFloat(linear ? 1.0f : 0.0f); changed = true; }
+                }
+                {
+                    float y = row("ANTI-ALIASING (MSAA)");
+                    int aa = r_msaa.AsInt();
+                    static const int kAaSteps[] = {0, 2, 4, 8};
+                    int idx = 0;
+                    for (size_t i = 0; i < std::size(kAaSteps); ++i) if (kAaSteps[i] == aa) idx = (int)i;
+                    char s[16]; std::snprintf(s, sizeof(s), aa == 0 ? "OFF" : "%dx", aa);
+                    if (uiButton(kCtrlX, y, 100, 32, s, Color{0.2f, 0.2f, 0.24f, 1.0f})) {
+                        idx = (idx + 1) % (int)std::size(kAaSteps);
+                        r_msaa.SetFloat((float)kAaSteps[idx]);
+                        changed = true;
+                    }
+                    uiDrawText(kCtrlX + 116, y + 8, "(CLICK TO CYCLE - APPLIES ON NEXT LAUNCH)", Color{0.5f, 0.5f, 0.5f, 1.0f}, 0.9f);
+                }
+                {
+                    float y = row("SHADOWS");
+                    static const char* kShadowLabels[] = {"OFF", "LOW", "HIGH"};
+                    int lvl = std::clamp(r_shadows.AsInt(), 0, 2);
+                    if (uiButton(kCtrlX, y, 100, 32, kShadowLabels[lvl], Color{0.2f, 0.2f, 0.24f, 1.0f})) {
+                        r_shadows.SetFloat((float)((lvl + 1) % 3));
+                        changed = true;
+                    }
+                }
+                {
+                    float y = row("AMBIENT OCCLUSION");
+                    bool ao = r_ao.AsBool();
+                    if (uiToggle(kCtrlX, y, 140, 32, &ao, "ON", "OFF")) { r_ao.SetFloat(ao ? 1.0f : 0.0f); changed = true; }
+                }
+                {
+                    float y = row("PARTICLE QUALITY");
+                    static const char* kPq[] = {"LOW", "MEDIUM", "HIGH"};
+                    int lvl = std::clamp(r_particles.AsInt(), 0, 2);
+                    if (uiButton(kCtrlX, y, 120, 32, kPq[lvl], Color{0.2f, 0.2f, 0.24f, 1.0f})) {
+                        r_particles.SetFloat((float)((lvl + 1) % 3));
+                        changed = true;
+                    }
+                }
+                uiDrawText(kLabelX, ry + 12, "SHADOWS/AO ARE RESERVED SETTINGS - THIS RENDERER DOESN'T IMPLEMENT THEM YET", Color{0.5f, 0.4f, 0.3f, 1.0f}, 1.0f);
+
+            } else if (settingsTab == SettingsTab::Audio) {
+                struct VolRow { const char* label; Cvar* cvar; };
+                VolRow vols[] = {
+                    {"MASTER VOLUME", &vol_master}, {"MUSIC VOLUME", &vol_music},
+                    {"EFFECTS VOLUME", &vol_effects}, {"VOICE VOLUME", &vol_voice}, {"UI VOLUME", &vol_ui},
+                };
+                for (auto& vr : vols) {
+                    float y = row(vr.label);
+                    float v = vr.cvar->AsFloat();
+                    if (uiSlider(kCtrlX, y + 8, 260, 16, &v, 0.0f, 1.0f, "")) { vr.cvar->SetFloat(v); changed = true; }
+                    char s[16]; std::snprintf(s, sizeof(s), "%d%%", (int)(v * 100.0f));
+                    uiDrawText(kCtrlX + 276, y + 4, s, kColorWhite, 1.2f);
+                }
+                uiDrawText(kLabelX, ry + 12, "NO AUDIO BACKEND YET - VOLUMES ARE SAVED FOR WHEN ONE EXISTS", Color{0.5f, 0.4f, 0.3f, 1.0f}, 1.0f);
+
+            } else if (settingsTab == SettingsTab::Controls) {
+                struct BindRow { const char* label; Cvar* cvar; };
+                BindRow binds[] = {
+                    {"MOVE FORWARD", &bind_forward}, {"MOVE BACK", &bind_back},
+                    {"MOVE LEFT", &bind_left}, {"MOVE RIGHT", &bind_right},
+                    {"JUMP", &bind_jump}, {"DUCK", &bind_duck},
+                    {"RELOAD", &bind_reload}, {"USE / PLANT / DEFUSE", &bind_use},
+                    {"BUY MENU", &bind_buymenu}, {"SCOREBOARD", &bind_scoreboard},
+                    {"THIRD PERSON", &bind_thirdperson},
+                };
+                for (auto& br : binds) {
+                    float y = row(br.label);
+                    std::string keyLabel = (awaitingBind == br.cvar) ? "PRESS A KEY..." : upper(br.cvar->AsString());
+                    Color bg = (awaitingBind == br.cvar) ? Color{0.7f, 0.5f, 0.1f, 1.0f} : Color{0.2f, 0.2f, 0.24f, 1.0f};
+                    if (uiButton(kCtrlX, y, 200, 32, keyLabel, bg) && !awaitingBind) {
+                        awaitingBind = br.cvar;
+                    }
+                }
+                uiDrawText(kLabelX, ry + 12, "CLICK A KEY, THEN PRESS THE NEW KEY (ESC TO CANCEL)", Color{0.5f, 0.5f, 0.5f, 1.0f}, 1.0f);
+
+            } else if (settingsTab == SettingsTab::Mouse) {
+                {
+                    float y = row("SENSITIVITY");
+                    float v = sensitivity.AsFloat();
+                    if (uiSlider(kCtrlX, y + 8, 260, 16, &v, 0.1f, 10.0f, "")) { sensitivity.SetFloat(v); changed = true; }
+                    char s[16]; std::snprintf(s, sizeof(s), "%.2f", v);
+                    uiDrawText(kCtrlX + 276, y + 4, s, kColorWhite, 1.2f);
+                }
+                {
+                    float y = row("ADS SENSITIVITY");
+                    float v = m_ads_sensitivity.AsFloat();
+                    if (uiSlider(kCtrlX, y + 8, 260, 16, &v, 0.1f, 2.0f, "")) { m_ads_sensitivity.SetFloat(v); changed = true; }
+                    char s[16]; std::snprintf(s, sizeof(s), "%.2f", v);
+                    uiDrawText(kCtrlX + 276, y + 4, s, kColorWhite, 1.2f);
+                }
+                {
+                    float y = row("INVERT MOUSE");
+                    bool inv = m_pitch.AsFloat() < 0.0f;
+                    if (uiToggle(kCtrlX, y, 140, 32, &inv, "ON", "OFF")) { m_pitch.SetFloat(inv ? -1.0f : 1.0f); changed = true; }
+                }
+                {
+                    float y = row("RAW INPUT");
+                    bool raw = m_rawinput.AsBool();
+                    if (uiToggle(kCtrlX, y, 140, 32, &raw, "ON", "OFF")) { m_rawinput.SetFloat(raw ? 1.0f : 0.0f); changed = true; }
+                }
+                {
+                    float y = row("MOUSE ACCELERATION");
+                    bool accel = m_customaccel.AsBool();
+                    if (uiToggle(kCtrlX, y, 140, 32, &accel, "ON", "OFF")) { m_customaccel.SetFloat(accel ? 1.0f : 0.0f); changed = true; }
+                }
+                uiDrawText(kLabelX, ry + 12, "RAW INPUT TAKES EFFECT ON NEXT LAUNCH - THE REST APPLY LIVE", Color{0.5f, 0.5f, 0.5f, 1.0f}, 1.0f);
+
+            } else if (settingsTab == SettingsTab::Crosshair) {
+                {
+                    float y = row("RED");
+                    float v = cl_crosshair_r.AsFloat();
+                    if (uiSlider(kCtrlX, y + 8, 200, 16, &v, 0.0f, 255.0f, "")) { cl_crosshair_r.SetFloat(std::round(v)); changed = true; }
+                }
+                {
+                    float y = row("GREEN");
+                    float v = cl_crosshair_g.AsFloat();
+                    if (uiSlider(kCtrlX, y + 8, 200, 16, &v, 0.0f, 255.0f, "")) { cl_crosshair_g.SetFloat(std::round(v)); changed = true; }
+                }
+                {
+                    float y = row("BLUE");
+                    float v = cl_crosshair_b.AsFloat();
+                    if (uiSlider(kCtrlX, y + 8, 200, 16, &v, 0.0f, 255.0f, "")) { cl_crosshair_b.SetFloat(std::round(v)); changed = true; }
+                }
+                {
+                    float y = row("SIZE");
+                    float v = cl_crosshair_size.AsFloat();
+                    if (uiSlider(kCtrlX, y + 8, 200, 16, &v, 1.0f, 30.0f, "")) { cl_crosshair_size.SetFloat(std::round(v)); changed = true; }
+                }
+                {
+                    float y = row("THICKNESS");
+                    float v = cl_crosshair_thickness.AsFloat();
+                    if (uiSlider(kCtrlX, y + 8, 200, 16, &v, 1.0f, 10.0f, "")) { cl_crosshair_thickness.SetFloat(std::round(v)); changed = true; }
+                }
+                {
+                    float y = row("GAP");
+                    float v = cl_crosshair_gap.AsFloat();
+                    if (uiSlider(kCtrlX, y + 8, 200, 16, &v, 0.0f, 20.0f, "")) { cl_crosshair_gap.SetFloat(std::round(v)); changed = true; }
+                }
+                {
+                    float y = row("OUTLINE");
+                    bool ol = cl_crosshair_outline.AsBool();
+                    if (uiToggle(kCtrlX, y, 140, 32, &ol, "ON", "OFF")) { cl_crosshair_outline.SetFloat(ol ? 1.0f : 0.0f); changed = true; }
+                }
+                {
+                    float y = row("CENTER DOT");
+                    bool dot = cl_crosshair_dot.AsBool();
+                    if (uiToggle(kCtrlX, y, 140, 32, &dot, "ON", "OFF")) { cl_crosshair_dot.SetFloat(dot ? 1.0f : 0.0f); changed = true; }
+                }
+                {
+                    float y = row("DYNAMIC");
+                    bool dyn = cl_crosshair_dynamic.AsBool();
+                    if (uiToggle(kCtrlX, y, 200, 32, &dyn, "DYNAMIC", "STATIC")) { cl_crosshair_dynamic.SetFloat(dyn ? 1.0f : 0.0f); changed = true; }
+                }
+
+                // Live preview against a neutral backdrop.
+                float previewX = 780, previewY = 260, previewSize = 200;
+                uiDrawRect(previewX, previewY, previewSize, previewSize, Color{0.08f, 0.09f, 0.11f, 1.0f});
+                uiDrawRectOutline(previewX, previewY, previewSize, previewSize, Color{0.3f, 0.3f, 0.35f, 1.0f}, 2.0f);
+                uiDrawText(previewX, previewY - 20, "PREVIEW", Color{0.6f, 0.6f, 0.6f, 1.0f}, 1.2f);
+                {
+                    Color xc{
+                        std::clamp(cl_crosshair_r.AsFloat() / 255.0f, 0.0f, 1.0f),
+                        std::clamp(cl_crosshair_g.AsFloat() / 255.0f, 0.0f, 1.0f),
+                        std::clamp(cl_crosshair_b.AsFloat() / 255.0f, 0.0f, 1.0f),
+                        1.0f,
+                    };
+                    float pcx = previewX + previewSize / 2.0f, pcy = previewY + previewSize / 2.0f;
+                    float size = std::max(1.0f, cl_crosshair_size.AsFloat());
+                    float thick = std::max(1.0f, cl_crosshair_thickness.AsFloat());
+                    float gap = std::max(0.0f, cl_crosshair_gap.AsFloat());
+                    bool outline = cl_crosshair_outline.AsBool();
+                    auto drawLeg = [&](float x, float y, float w, float h) {
+                        if (outline) uiDrawRect(x - 1, y - 1, w + 2, h + 2, kColorBlack);
+                        uiDrawRect(x, y, w, h, xc);
+                    };
+                    drawLeg(pcx - thick / 2.0f, pcy - gap - size, thick, size);
+                    drawLeg(pcx - thick / 2.0f, pcy + gap, thick, size);
+                    drawLeg(pcx - gap - size, pcy - thick / 2.0f, size, thick);
+                    drawLeg(pcx + gap, pcy - thick / 2.0f, size, thick);
+                    if (cl_crosshair_dot.AsBool()) drawLeg(pcx - thick / 2.0f, pcy - thick / 2.0f, thick, thick);
+                }
+            }
+
+            if (changed) SettingsSave();
+
         } else if (screen == Screen::CaseOpening) {
             uiDrawText(24, 84, "OPENING CASE...", kColorWhite, 3.0f);
 
@@ -399,6 +686,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    SettingsSave();
     SDL_GL_DeleteContext(ctx);
     SDL_DestroyWindow(window);
     SDL_Quit();

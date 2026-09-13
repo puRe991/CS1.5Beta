@@ -28,3 +28,14 @@ float uiTextWidth(const std::string& text, float scale = 2.0f);
 bool uiButton(float x, float y, float w, float h, const std::string& label, Color bg, Color fg = kColorWhite);
 
 bool uiMouseInRect(float x, float y, float w, float h);
+
+// Draws a horizontal slider (track + filled portion + label above it) and,
+// while it's being dragged, writes the new value into *value (clamped to
+// [minV, maxV]) and returns true. Tracks the active drag by the identity of
+// `value` so dragging keeps working even if the mouse strays slightly
+// outside the track rect.
+bool uiSlider(float x, float y, float w, float h, float* value, float minV, float maxV, const std::string& label);
+
+// A button that flips *value on click and shows labelOn/labelOff depending
+// on its current state; returns true on the frame it was toggled.
+bool uiToggle(float x, float y, float w, float h, bool* value, const std::string& labelOn, const std::string& labelOff);

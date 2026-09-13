@@ -11,6 +11,7 @@ add_executable(cs15engine
     src/main.cpp
     src/camera.cpp
     src/cvar.cpp
+    src/settings.cpp
     src/console.cpp
     src/entities.cpp
     src/brush_entities.cpp
@@ -71,6 +72,8 @@ add_executable(csmenu
     src/ui/ui.cpp
     src/inventory.cpp
     src/assets/mdl.cpp
+    src/cvar.cpp
+    src/settings.cpp
 )
 target_include_directories(csmenu PRIVATE ${SDL2_INCLUDE_DIRS} src)
 target_link_libraries(csmenu PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
