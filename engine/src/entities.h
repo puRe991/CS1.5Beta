@@ -7,8 +7,11 @@
 // Classifies the BSP entity lump's raw key/value soup into typed gameplay
 // data. Deliberately scoped to what's needed for a first playable test —
 // spawn points and the two zone types (bomb target, buy zone) — not a
-// general-purpose entity/scripting system (see README TODO for the rest:
-// func_door/func_button logic, breakables, triggers, etc).
+// general-purpose entity/scripting system. Moving/destructible brush
+// entities (func_door, func_plat, func_breakable) are handled separately in
+// brush_entities.h, since they need per-frame simulation and their own
+// collision, not just a one-time classification; func_button and triggers
+// are still unhandled (see README TODO).
 enum class Team { Unknown, T, CT };
 
 struct SpawnPoint {

@@ -217,10 +217,12 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     models_.clear();
     for (size_t o = 0; o + sizeof(DModel) <= modelData.size(); o += sizeof(DModel)) {
         const DModel* m = reinterpret_cast<const DModel*>(modelData.data() + o);
-        models_.push_back(BspModelBounds{
+        BspModelBounds bounds{
             Vec3{m->mins[0], m->mins[1], m->mins[2]},
             Vec3{m->maxs[0], m->maxs[1], m->maxs[2]}
-        });
+        };
+        for (int i = 0; i < 4; ++i) bounds.headNode[i] = m->headNode[i];
+        models_.push_back(bounds);
     }
     renderHeadNode_ = -1;
     if (!models_.empty()) {
@@ -347,6 +349,19 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
     faces_.clear();
     faces_.reserve(numFaces);
     rawToCompactFace_.assign(numFaces, -1);
+    faceModel_.clear();
+    faceModel_.reserve(numFaces);
+
+    // Raw DFace index -> owning submodel, from each DModel's firstFace/numFaces
+    // range (model 0 = worldspawn/static geometry, defaulted below).
+    std::vector<int32_t> rawFaceModel(numFaces, 0);
+    for (size_t o = 0; o + sizeof(DModel) <= modelData.size(); o += sizeof(DModel)) {
+        const DModel* m = reinterpret_cast<const DModel*>(modelData.data() + o);
+        int32_t modelIndex = (int32_t)(o / sizeof(DModel));
+        for (int32_t ff = m->firstFace; ff < m->firstFace + m->numFaces; ++ff) {
+            if (ff >= 0 && (size_t)ff < numFaces) rawFaceModel[ff] = modelIndex;
+        }
+    }
 
     for (size_t fi = 0; fi < numFaces; ++fi) {
         const DFace& df = faces[fi];
@@ -414,6 +429,7 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
 
         if (face.vertices.size() >= 3) {
             rawToCompactFace_[fi] = (int32_t)faces_.size();
+            faceModel_.push_back(rawFaceModel[fi]);
             faces_.push_back(std::move(face));
         }
     }
@@ -518,10 +534,10 @@ bool BspMap::pointInSolid(Vec3 point, Vec3& outPlaneNormal) const {
     return pointInSolidHull(point, 1, &outPlaneNormal);
 }
 
-bool BspMap::pointInSolidHull(Vec3 point, int hull, Vec3* outPlaneNormal) const {
-    if (hull < 0 || hull > 3 || headNodes_[hull] < 0 || clipNodes_.empty()) return false;
+bool BspMap::walkClipTree(Vec3 point, int32_t headNode, Vec3* outPlaneNormal) const {
+    if (headNode < 0 || clipNodes_.empty()) return false;
 
-    int32_t node = headNodes_[hull];
+    int32_t node = headNode;
     Vec3 planeNormal{0, 0, 1};
     while (node >= 0) {
         const ClipNode& cn = clipNodes_[node];
@@ -538,6 +554,16 @@ bool BspMap::pointInSolidHull(Vec3 point, int hull, Vec3* outPlaneNormal) const 
     }
     if (outPlaneNormal) *outPlaneNormal = planeNormal;
     return node == kContentsSolid;
+}
+
+bool BspMap::pointInSolidHull(Vec3 point, int hull, Vec3* outPlaneNormal) const {
+    if (hull < 0 || hull > 3) return false;
+    return walkClipTree(point, headNodes_[hull], outPlaneNormal);
+}
+
+bool BspMap::pointInSolidModel(Vec3 point, int modelIndex, int hull, Vec3* outPlaneNormal) const {
+    if (modelIndex < 0 || (size_t)modelIndex >= models_.size() || hull < 0 || hull > 3) return false;
+    return walkClipTree(point, models_[modelIndex].headNode[hull], outPlaneNormal);
 }
 
 bool BspMap::traceLine(Vec3 start, Vec3 end, Vec3& outHit, Vec3* outNormal) const {
