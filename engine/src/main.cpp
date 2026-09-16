@@ -180,6 +180,7 @@ static Cvar r_width("width", "1280", CVAR_ARCHIVE, "window width in pixels");
 static Cvar r_height("height", "720", CVAR_ARCHIVE, "window height in pixels");
 static Cvar r_vsync("vsync", "1", CVAR_ARCHIVE, "1 = vsync on, 0 = off");
 static Cvar snd_volume("snd_volume", "1.0", CVAR_ARCHIVE, "master sound volume, 0-1");
+static Cvar bot_difficulty("bot_difficulty", "2", CVAR_ARCHIVE, "0=beginner 1=easy 2=normal 3=expert");
 static const char* kConfigPath = "config.cfg";
 
 int main(int argc, char** argv) {
@@ -441,7 +442,9 @@ int main(int argc, char** argv) {
     int botRunSeq = hasBotBodyModel ? botBodyModel.findSequence("run") : -1;
     constexpr int kBotCount = 4;
     BotSystem botSystem;
-    botSystem.spawn(kBotCount, botTeam, entities);
+    BotDifficulty botDifficulty = (BotDifficulty)std::clamp(bot_difficulty.AsInt(), 0, 3);
+    botSystem.spawn(kBotCount, botTeam, entities, botDifficulty);
+    botSystem.buildNav(map, entities, worldMins, worldMaxs);
     int sndBotHit = audio.loadSound(wadDir + "/sound/player/bhit_flesh-1.wav");
 
     Camera camera;
@@ -526,6 +529,11 @@ int main(int argc, char** argv) {
     int ammoInMag = weaponByIndex(currentWeaponIndex).magazineSize;
     int reserveAmmo = weaponByIndex(currentWeaponIndex).reserveAmmo;
     float fireCooldown = 0.0f;
+    // Gunshots the player fired this frame, queued for bots' hearing on the
+    // *next* frame's update() call (bots already updated earlier this frame,
+    // before the player's own shoot handler runs) — a one-frame delay, not
+    // instant, but real perception rather than none.
+    std::vector<Vec3> pendingPlayerSounds;
     bool mouseWasDown = false;
 
     // --- Damage flash (screen reddens briefly when hurt) ---
@@ -796,7 +804,8 @@ int main(int argc, char** argv) {
         if (round.phase == RoundPhase::Live) {
             Vec3 playerFeet{camera.x, camera.y, camera.z};
             Vec3 playerEye{camera.x, camera.y, camera.z + (ducked ? kDuckEyeHeight : kEyeHeight)};
-            std::vector<BotFiredEvent> botFires = botSystem.update(dt, map, brushEntities, entities, player, playerEye, playerFeet);
+            std::vector<BotFiredEvent> botFires = botSystem.update(dt, map, brushEntities, entities, player, round, playerEye, playerFeet, pendingPlayerSounds);
+            pendingPlayerSounds.clear();
             for (const BotFiredEvent& fired : botFires) {
                 audio.play3D(sndShootByCategory[(int)WeaponCategory::Rifle],
                              Vec3f{(float)fired.position.x, (float)fired.position.y, (float)fired.position.z}, 0.9f, 2000.0f);
@@ -967,6 +976,7 @@ int main(int argc, char** argv) {
                              0.15f, 0.06f);
             audio.play2D(sndShootByCategory[(int)equippedWeapon.category], 0.9f); // 2D: the shooter always hears their own gunfire at full volume
             Vec3 traceStart{eye.x, eye.y, eye.z};
+            pendingPlayerSounds.push_back(traceStart); // bots can hear this next frame (see bots.h)
             float kRange = isMelee ? kMeleeRange : 4096.0f;
             Vec3 traceEnd{eye.x + forwardDir.x * kRange, eye.y + forwardDir.y * kRange, eye.z + forwardDir.z * kRange};
             Vec3 hit;
