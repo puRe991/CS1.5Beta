@@ -421,6 +421,12 @@ struct MdlStudioMesh {
     int32_t numNorms;
     int32_t normIndex;
 };
+struct MdlStudioBBox {
+    int32_t bone;
+    int32_t group;
+    float bbMin[3];
+    float bbMax[3];
+};
 #pragma pack(pop)
 
 // Builds a minimal single-triangle, single-bone, single-texture MDL v10 file
@@ -533,6 +539,53 @@ inline std::string buildSimpleMdl() {
     put(triOffset, cmds, sizeof(cmds));
     put(texDataOffset, texPixels.data(), texPixels.size());
     put(texDataOffset + (int32_t)texPixels.size(), palette, sizeof(palette));
+
+    std::string path = tempFilePath(".mdl");
+    writeFile(path, file);
+    return path;
+}
+
+// Builds a minimal two-bone MDL v10 file with a hitbox on each bone — no
+// mesh/texture data, just enough to exercise hitbox parsing and
+// MdlModel::poseHitboxes()'s bind-pose bone-world transform. Bone 0 is the
+// root (identity, at the origin); bone 1 is its child, translated
+// `childOffsetX` along X with no rotation.
+inline std::string buildMdlWithHitboxes(float childOffsetX = 100.0f) {
+    MdlStudioBone bones[2] = {};
+    setName(bones[0].name, sizeof(bones[0].name), "root");
+    bones[0].parent = -1;
+    setName(bones[1].name, sizeof(bones[1].name), "child");
+    bones[1].parent = 0;
+    bones[1].value[0] = childOffsetX; // X translation, no rotation
+
+    MdlStudioBBox boxes[2] = {};
+    boxes[0].bone = 0;
+    boxes[0].group = 1; // HITGROUP_HEAD
+    boxes[0].bbMin[0] = -5; boxes[0].bbMin[1] = -5; boxes[0].bbMin[2] = -5;
+    boxes[0].bbMax[0] = 5;  boxes[0].bbMax[1] = 5;  boxes[0].bbMax[2] = 5;
+    boxes[1].bone = 1;
+    boxes[1].group = 6; // HITGROUP_LEFTLEG
+    boxes[1].bbMin[0] = -2; boxes[1].bbMin[1] = -2; boxes[1].bbMin[2] = -2;
+    boxes[1].bbMax[0] = 2;  boxes[1].bbMax[1] = 2;  boxes[1].bbMax[2] = 2;
+
+    auto align4 = [](int32_t v) { return (v + 3) & ~3; };
+
+    MdlStudioHeader hdr{};
+    hdr.ident = 0x54534449; // "IDST"
+    hdr.version = 10;
+    setName(hdr.name, sizeof(hdr.name), "hitbox_test.mdl");
+    hdr.numBones = 2;
+    hdr.numHitboxes = 2;
+
+    int32_t offset = sizeof(MdlStudioHeader);
+    hdr.boneIndex = offset; offset = align4(offset + (int32_t)sizeof(bones));
+    hdr.hitboxIndex = offset; offset = align4(offset + (int32_t)sizeof(boxes));
+    hdr.length = offset;
+
+    std::vector<uint8_t> file(offset, 0);
+    std::memcpy(file.data(), &hdr, sizeof(hdr));
+    std::memcpy(file.data() + hdr.boneIndex, bones, sizeof(bones));
+    std::memcpy(file.data() + hdr.hitboxIndex, boxes, sizeof(boxes));
 
     std::string path = tempFilePath(".mdl");
     writeFile(path, file);

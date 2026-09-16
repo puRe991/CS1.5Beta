@@ -135,4 +135,59 @@ TEST(mdl_rejects_vertex_count_that_overflows_when_scaled) {
     CHECK_EQ(m.triangles().size(), (size_t)0);
 }
 
+TEST(mdl_parses_hitboxes_with_correct_body_part) {
+    std::string path = fixtures::buildMdlWithHitboxes();
+    MdlModel model;
+    CHECK(model.load(path));
+    CHECK_EQ(model.hitboxes().size(), (size_t)2);
+    if (model.hitboxes().size() == 2) {
+        CHECK_EQ(model.hitboxes()[0].bone, 0);
+        CHECK(model.hitboxes()[0].part == BodyPart::Head);
+        CHECK_EQ(model.hitboxes()[1].bone, 1);
+        CHECK(model.hitboxes()[1].part == BodyPart::LeftLeg);
+    }
+}
+
+TEST(mdl_pose_hitboxes_transforms_by_bone_world_position) {
+    std::string path = fixtures::buildMdlWithHitboxes(100.0f);
+    MdlModel model;
+    CHECK(model.load(path));
+
+    std::vector<WorldHitbox> boxes = model.poseHitboxes(-1, 0.0f); // bind pose
+    CHECK_EQ(boxes.size(), (size_t)2);
+    if (boxes.size() == 2) {
+        // Bone 0 (root, identity at origin): hitbox stays exactly where it
+        // was authored, bone-local space == world space here.
+        CHECK_NEAR(boxes[0].mins[0], -5.0f, 1e-4f);
+        CHECK_NEAR(boxes[0].maxs[0], 5.0f, 1e-4f);
+
+        // Bone 1 (child, translated +100 on X from its parent): the
+        // hitbox's world position should have moved with it.
+        CHECK_NEAR(boxes[1].mins[0], 98.0f, 1e-4f);
+        CHECK_NEAR(boxes[1].maxs[0], 102.0f, 1e-4f);
+        CHECK_NEAR(boxes[1].mins[1], -2.0f, 1e-4f);
+        CHECK_NEAR(boxes[1].maxs[1], 2.0f, 1e-4f);
+    }
+}
+
+TEST(mdl_pose_hitboxes_empty_when_model_has_none) {
+    std::string path = fixtures::buildSimpleMdl();
+    MdlModel model;
+    CHECK(model.load(path));
+    CHECK(model.hitboxes().empty());
+    CHECK(model.poseHitboxes(-1, 0.0f).empty());
+}
+
+TEST(body_part_for_hit_group_matches_hl_sdk_constants) {
+    CHECK(bodyPartForHitGroup(0) == BodyPart::Generic);
+    CHECK(bodyPartForHitGroup(1) == BodyPart::Head);
+    CHECK(bodyPartForHitGroup(2) == BodyPart::Chest);
+    CHECK(bodyPartForHitGroup(3) == BodyPart::Stomach);
+    CHECK(bodyPartForHitGroup(4) == BodyPart::LeftArm);
+    CHECK(bodyPartForHitGroup(5) == BodyPart::RightArm);
+    CHECK(bodyPartForHitGroup(6) == BodyPart::LeftLeg);
+    CHECK(bodyPartForHitGroup(7) == BodyPart::RightLeg);
+    CHECK(bodyPartForHitGroup(99) == BodyPart::Generic); // unknown id, not a crash
+}
+
 int main() { return RUN_ALL_TESTS(); }

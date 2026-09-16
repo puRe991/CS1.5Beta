@@ -57,6 +57,8 @@ engine/
     entities.{h,cpp}     # BSP entity lump -> spawns, bomb targets, buy zones
     menu_main.cpp        # CS:GO-inspired main menu (Play/Watch/Inventory/Store)
     inventory.{h,cpp}    # fictive-currency skin/case economy + case-opening RNG
+    weapons.h            # weapon catalog: price/model/ammo/damage/fire-rate/etc. per weapon
+    hitboxes.h           # per-body-part damage multipliers + ray-vs-hitbox trace
     render/
       render.{h,cpp}      # shared GL drawing: texture upload, BSP/MDL draw, screenshots
     ui/
@@ -75,6 +77,7 @@ engine/
       mapshot.cpp        # standalone map screenshot tool
       modelshot.cpp      # standalone model screenshot tool
       mdlbatchtest.cpp   # batch-load a list of .mdl files, report pass/fail per file
+      hitboxtest.cpp     # load one .mdl, print its parsed hitboxes/body parts/world bounds
   tests/                 # unit tests (CTest), run headless — no SDL/GL needed
     test_framework.h     # tiny header-only test harness (no external dependency)
     fixtures.h           # builds synthetic PAK/WAD3/BSP/MDL files in memory
@@ -109,6 +112,7 @@ touching any of the asset loaders.
 - [x] CS:GO-inspired main menu (`csmenu`): top nav bar (Play/Watch/Inventory/Store), built-in bitmap-font UI toolkit (no external font/image libs), functional Store → buy case → Inventory → open case → reveal loop with rarity tiers/odds matching CS:GO's real distribution (79.92% Mil-Spec / 15.98% Restricted / 3.2% Classified / 0.64% Covert / 0.26% Special)
 - All of the above verified against real CS 1.5 release assets (`de_dust2.bsp`, multiple `.wad` files, `urban.mdl`, all 87 weapon models), not just compiled
 - [x] Sound engine: own RIFF/WAVE parser (`assets/wav.*`, PCM 8/16-bit mono/stereo) feeding an SDL audio-callback mixer (`audio/audio.*`) that plays any number of simultaneous 2D and 3D voices — 3D voices get linear distance falloff and a stereo pan derived from position relative to the listener's right vector. Wired into gameplay: gunshots and reloads (2D, always full volume to the shooter), jump, footsteps (fired every `kFootstepInterval` units walked, not every frame), and breakable destruction (3D, at the impact point) — same graceful-load pattern as the particle/decal systems: a missing `sound/` directory just means silence, not a crash, since no game audio assets ship with this engine. New `snd_volume` cvar controls master volume.
+- [x] Named per-body-part hitboxes with damage multipliers: `assets/mdl.{h,cpp}` now parses a model's real hitbox lump (`mstudiobbox_t` — bone index, HITGROUP id, bone-local AABB) and classifies each one by the HL SDK's actual `HITGROUP_*` constants (0 generic, 1 head, 2 chest, 3 stomach, 4/5 left/right arm, 6/7 left/right leg) rather than guessing from bone names. `MdlModel::poseHitboxes()` transforms every hitbox into a world-space AABB at any bind or animated pose (refactored the existing bone-world-transform math out of `pose()` into shared helpers so both use the same code path). `hitboxes.h` adds the actual per-body-part damage multipliers (head 4x, stomach 1.25x, limbs 0.75x, chest/generic 1x) and `traceHitboxes()`, a slab-method ray-vs-AABB test that picks the nearest hit box. Verified with synthetic two-bone/two-hitbox fixtures (`test_mdl.cpp`, `test_hitboxes.cpp`) and a new `hitboxtest` debug tool (prints a model's hitboxes/body parts/world bounds, same convention as `mdlbatchtest`/`modelshot`) for checking against real assets. Not yet wired into actual PvP damage — there's still no opposing player/bot entity to hit-test against (see Bots & AI / Networking), so this is verified infrastructure, not a live gameplay path yet.
 
 ## To Do — what's still needed for a full, playable Counter-Strike
 
@@ -194,7 +198,7 @@ single-player-only foundation already exists elsewhere in this README.
 ### Weapon system depth
 - [x] Full weapon roster across categories (`weapons.h`'s `kWeaponCatalog`): melee (knife), 6 pistols, 5 SMGs, 2 shotguns, 6 rifles, 4 snipers, 1 heavy (M249) — 25 weapons total, each with its own price/model/magazine+reserve ammo/damage/fire-rate/full-auto flag/move-speed scale, buyable from a per-category buy-menu layout and fully swappable at runtime (view model, animations, ammo, fire behavior). Fire rate and full-auto vs. semi-auto are both real now (a cooldown timer gated by each weapon's `fireRateRpm`, instead of every weapon firing once per click), reload respects actual magazine/reserve sizes instead of refilling a hardcoded 30, and per-category fire sounds play through the new audio engine. Data-driven in the sense of "one static table describing every weapon", not yet "loaded from external data files" — see the row below.
 - [ ] External data-driven weapon definitions (loaded from a data file at runtime, not a compiled-in C++ table) — plus depth the current table doesn't model at all: accuracy/spread curves (stand/crouch/move/jump), recoil pattern + recovery, armor penetration, damage falloff by range, headshot multiplier, draw/holster time, reload *time* (ammo currently refills instantly on 'R')
-- [ ] Named per-body-part hitboxes (head, chest, stomach, arms, legs) with independent damage multipliers — currently hitscan does undifferentiated flat damage to one PlayerState, no hitbox geometry at all
+- [x] Named per-body-part hitboxes (head, chest, stomach, arms, legs) with independent damage multipliers — parsing, world-space transform, and the ray-vs-hitbox trace itself are done (see Status above); still not connected to an actual damage event, since hitscan only ever damages breakables/the world today (`main.cpp`'s shoot handler), never another player — that needs a real opposing entity first (bots or a second networked player)
 - [ ] Learnable, non-random-feeling recoil patterns (deterministic vertical+horizontal pattern + bounded randomness + recovery-over-time), first-shot accuracy, moving/jumping/crouching accuracy modifiers
 - [ ] Armor/helmet damage reduction model
 - [ ] Bullet penetration through thin materials ("wallbang")
