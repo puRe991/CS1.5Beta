@@ -140,7 +140,7 @@ touching any of the asset loaders.
 - [ ] Hostage rescue mode logic (`cs_` maps)
 - [x] Team assignment (`PlayerState.team`) drives team-based spawn selection for both initial spawn and respawn. No team-select screen, no auto-balance, no other players — 'N' is a debug key to switch team for testing.
 - [x] HUD: crosshair, ammo, weapon name, health, round timer, money, team, zone/plant/defuse/bomb indicators, damage flash, and a real per-map radar (loads `cstrike/overviews/<map>.bmp`, player dot from our own BSP world bounds — not the overview file's own undocumented zoom/origin metadata)
-- [x] In-round buy menu (`weapons.h`): B key, gated to standing in a real func_buyzone + round live, weapon catalog with prices, deducts money and swaps the equipped weapon/ammo. Money system: starts at 800, flat per-round reward (no real win/loss economy tied to it yet). Only affects the primary weapon slot — no pistol/grenade/armor purchases, no per-team price differences yet.
+- [x] In-round buy menu (`weapons.h`): B key, gated to standing in a real func_buyzone + round live, full weapon catalog (25 weapons, one buy-menu column per category) with prices, deducts money and swaps the equipped weapon/magazine+reserve ammo. Money system: starts at 800, flat per-round reward (no real win/loss economy tied to it yet). Still a single weapon slot — buying a new gun replaces whatever's equipped, there's no separate pistol/primary/grenade/armor slots or per-team price differences yet.
 - [x] Scoreboard (hold Tab): real CT/T round-win tally, player's own team/money/health/round number. No player roster or kill count — single-player only, nothing else to list.
 
 ### Main Menu / Meta-game
@@ -192,12 +192,12 @@ single-player-only foundation already exists elsewhere in this README.
 - [ ] A mode/gametype selector at all — today `csmenu`'s PLAY only picks a map and always launches the same single-player round loop
 
 ### Weapon system depth
-- [ ] Data-driven weapon definitions (external data, not hardcoded values) covering: price, damage, fire rate, magazine/reserve ammo, reload time, move-speed penalty, accuracy/spread curves (stand/crouch/move/jump), recoil pattern + recovery, armor penetration, damage falloff by range, headshot multiplier, draw/holster time
+- [x] Full weapon roster across categories (`weapons.h`'s `kWeaponCatalog`): melee (knife), 6 pistols, 5 SMGs, 2 shotguns, 6 rifles, 4 snipers, 1 heavy (M249) — 25 weapons total, each with its own price/model/magazine+reserve ammo/damage/fire-rate/full-auto flag/move-speed scale, buyable from a per-category buy-menu layout and fully swappable at runtime (view model, animations, ammo, fire behavior). Fire rate and full-auto vs. semi-auto are both real now (a cooldown timer gated by each weapon's `fireRateRpm`, instead of every weapon firing once per click), reload respects actual magazine/reserve sizes instead of refilling a hardcoded 30, and per-category fire sounds play through the new audio engine. Data-driven in the sense of "one static table describing every weapon", not yet "loaded from external data files" — see the row below.
+- [ ] External data-driven weapon definitions (loaded from a data file at runtime, not a compiled-in C++ table) — plus depth the current table doesn't model at all: accuracy/spread curves (stand/crouch/move/jump), recoil pattern + recovery, armor penetration, damage falloff by range, headshot multiplier, draw/holster time, reload *time* (ammo currently refills instantly on 'R')
 - [ ] Named per-body-part hitboxes (head, chest, stomach, arms, legs) with independent damage multipliers — currently hitscan does undifferentiated flat damage to one PlayerState, no hitbox geometry at all
 - [ ] Learnable, non-random-feeling recoil patterns (deterministic vertical+horizontal pattern + bounded randomness + recovery-over-time), first-shot accuracy, moving/jumping/crouching accuracy modifiers
 - [ ] Armor/helmet damage reduction model
 - [ ] Bullet penetration through thin materials ("wallbang")
-- [ ] Full weapon roster across categories (pistols/SMGs/shotguns/rifles/snipers/heavy/melee) — only one rifle (AK47) is wired into gameplay today, even though all 87 view/world/pickup models already load
 - [ ] Server-side hit validation (moot until there's a client/server split at all — see Networking)
 
 ### Grenades & thrown utility
