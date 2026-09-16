@@ -7,18 +7,28 @@
 #include "brush_entities.h"
 #include "entities.h"
 #include "game_state.h"
+#include "nav.h"
 
-// A first, real AI opponent — not a stub. Explicitly *not* covering the
-// rest of the Bots & AI README TODO: one shared difficulty (no tiers),
-// perception is a single line-of-sight raycast + max view distance (no
-// simulated hearing, no reaction-time delay), and movement is straight-line
-// steering with the same per-axis wall-slide collision the player uses —
-// no navmesh/waypoint graph, so a bot can get stuck on complex geometry a
-// real path wouldn't. No buy decisions, site attack/defense, or
-// coordination between bots either. What *is* real: perception, movement,
-// firing (with actual damage to the player), and being shot back (via the
-// hitbox system in hitboxes.h) with real death/respawn tied into the round.
-enum class BotState { Idle, Chase, Attack };
+// A real AI opponent, not a stub — see the README's Bots & AI section for
+// the honest list of what this still doesn't cover (still no true
+// polygonal navmesh, just a coarse visibility graph; no real per-round buy
+// strategy beyond "spend on the best affordable gun"; no rotations or
+// explicit team callouts beyond a shared last-seen-position).
+enum class BotState { Idle, Search, Chase, Attack };
+
+// One difficulty tier's tuning: how long a bot takes to react once it spots
+// the player, how often its shots actually connect, how far it can see,
+// and how far a gunshot alerts it even without line of sight.
+enum class BotDifficulty { Beginner, Easy, Normal, Expert };
+
+struct BotDifficultyTuning {
+    float reactionTime;
+    float hitChance;
+    float viewDistance;
+    float hearingRadius;
+};
+
+BotDifficultyTuning tuningForDifficulty(BotDifficulty difficulty);
 
 struct Bot {
     Vec3 origin{};   // feet position, same convention as camera.x/y/z
@@ -28,11 +38,28 @@ struct Bot {
     int health = kMaxHealth;
     bool alive = true;
     Team team = Team::T;
+    BotDifficulty difficulty = BotDifficulty::Normal;
     BotState state = BotState::Idle;
     float fireCooldown = 0.0f;
+    float reactionRemaining = 0.0f; // must reach 0 before a freshly-spotted bot will actually fire
+
     Vec3 wanderTarget{};
-    float wanderTimer = 0.0f; // seconds until a new wander target is picked
-    bool moving = false;       // drives idle-vs-run animation selection
+    float wanderTimer = 0.0f; // seconds until a new wander/patrol target is picked
+
+    Vec3 investigateTarget{}; // where Search state heads: a heard sound or a teammate's last-seen player position
+    float investigateTimer = 0.0f; // gives up and returns to Idle once this runs out
+
+    // Coarse path-following state (see NavGraph in nav.h): recomputed
+    // whenever the movement goal moves far enough from what the current
+    // path was planned for.
+    std::vector<Vec3> path;
+    size_t pathIndex = 0;
+    Vec3 pathGoal{};
+
+    int money = kStartingMoney;
+    int weaponIndex = 16; // AK47 — the default before a bot's first buy
+
+    bool moving = false; // drives idle-vs-run animation selection
     float animTime = 0.0f;
 };
 
@@ -51,28 +78,49 @@ public:
 
     // Spawns `count` bots on `team` at that team's spawn points (falling
     // back to any spawn point if the team has none, same rule
-    // pickSpawnForTeam uses for the player).
-    void spawn(int count, Team team, const EntitySystem& entities);
+    // pickSpawnForTeam uses for the player), all at the given difficulty,
+    // and has each one spend its starting money on a weapon immediately
+    // (see buyWeapon() in bots.cpp).
+    void spawn(int count, Team team, const EntitySystem& entities, BotDifficulty difficulty = BotDifficulty::Normal);
 
-    // Heals/respawns every bot at a fresh spawn point — called at the start
+    // Heals/respawns every bot at a fresh spawn point, credits this round's
+    // money reward, and has each one re-buy a weapon — called at the start
     // of each new round, same as the player's own respawn.
     void respawnAll(const EntitySystem& entities);
 
     int aliveCount() const;
 
-    // Advances every bot one frame: perception (line-of-sight + distance to
-    // the player), state (Idle wander / Chase / Attack), movement (wall-slide
-    // collision against both static world geometry and brush entities, plus
-    // simple gravity/ground-probe), and firing at the player when in range
-    // and unobstructed — which applies real damage via damagePlayer().
-    // Returns this update's fire events (one per bot that took a shot).
+    // Builds (or rebuilds) the coarse waypoint graph bots path-find over.
+    // Call once after the map/entities are loaded (mapMins/mapMaxs is the
+    // worldspawn model's bounds, same as main.cpp already computes for the
+    // radar). A BotSystem that never calls this just falls back to
+    // direct-line steering for movement, same as before this existed.
+    void buildNav(const BspMap& map, const EntitySystem& entities, Vec3 mapMins, Vec3 mapMaxs);
+
+    // Advances every bot one frame: perception (line-of-sight + distance,
+    // plus hearing — `externalSounds` is this frame's outside noises, e.g.
+    // the player's own gunfire, reported by the caller), state (Idle wander
+    // / Search / Chase / Attack), movement (nav-graph path-following where
+    // a graph exists, wall-slide collision either way), and firing at the
+    // player once in range, unobstructed, and past its reaction delay —
+    // which applies real damage via damagePlayer(). Returns this update's
+    // fire events (one per bot that took a shot); bots hear each other's
+    // gunfire too; a teammate who has the player in sight shares that
+    // position with the rest of the team for a few seconds even after
+    // losing sight of it themself.
     std::vector<BotFiredEvent> update(float dt, const BspMap& map, const BrushEntitySystem& brushEntities,
                                        const EntitySystem& entities, PlayerState& player,
-                                       Vec3 playerEye, Vec3 playerFeet);
+                                       Vec3 playerEye, Vec3 playerFeet,
+                                       const std::vector<Vec3>& externalSounds = {});
 
     // Applies damage to one bot; returns true if this killed it. Used by
     // the player's own hitscan (see main.cpp's shoot handler).
     bool damage(size_t botIndex, int amount);
+
+private:
+    NavGraph nav_;
+    Vec3 teamLastKnownEnemyPos_{};
+    float teamLastKnownEnemyAge_ = 1e9f; // seconds since any teammate last saw the player; huge = "never"
 };
 
 // Transforms a model's posed-but-untransformed hitboxes (the space
