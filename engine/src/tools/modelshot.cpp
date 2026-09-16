@@ -4,32 +4,11 @@
 #include <GL/gl.h>
 #include <algorithm>
 #include <cstdio>
-#include <cstring>
 #include <vector>
 
 #include "../assets/mdl.h"
 #include "../mat4.h"
-
-namespace {
-
-GLuint uploadTexture(const MdlTexture& tex) {
-    GLuint id = 0;
-    glGenTextures(1, &id);
-    glBindTexture(GL_TEXTURE_2D, id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    if (!tex.rgba.empty()) {
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex.width, tex.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex.rgba.data());
-    } else {
-        uint8_t pixels[16] = {255,0,255,255, 0,0,0,255, 0,0,0,255, 255,0,255,255};
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    }
-    return id;
-}
-
-} // namespace
+#include "../render/render.h"
 
 int main(int argc, char** argv) {
     if (argc < 3) {
@@ -82,43 +61,12 @@ int main(int argc, char** argv) {
     glMatrixMode(GL_MODELVIEW);
     glLoadMatrixf(view.m);
 
-    std::vector<GLuint> texIds;
-    for (const auto& tex : model.textures()) texIds.push_back(uploadTexture(tex));
-
-    GLuint currentTex = (GLuint)-1;
-    glBegin(GL_TRIANGLES);
-    for (const auto& tri : model.triangles()) {
-        GLuint texId = (tri.textureIndex >= 0 && (size_t)tri.textureIndex < texIds.size()) ? texIds[tri.textureIndex] : 0;
-        if (texId != currentTex) {
-            glEnd();
-            glBindTexture(GL_TEXTURE_2D, texId);
-            currentTex = texId;
-            glBegin(GL_TRIANGLES);
-        }
-        float texW = 64, texH = 64;
-        if (tri.textureIndex >= 0 && (size_t)tri.textureIndex < model.textures().size()) {
-            texW = (float)model.textures()[tri.textureIndex].width;
-            texH = (float)model.textures()[tri.textureIndex].height;
-        }
-        for (const MdlVertex* v : {&tri.a, &tri.b, &tri.c}) {
-            glTexCoord2f(v->u / texW, v->v / texH);
-            glVertex3f(v->x, v->y, v->z);
-        }
-    }
-    glEnd();
+    std::vector<GLuint> texIds = uploadTextures(model.textures());
+    drawMdlTriangles(model, texIds);
 
     SDL_GL_SwapWindow(window);
 
-    std::vector<uint8_t> pixels(W * H * 3);
-    glReadPixels(0, 0, W, H, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
-    std::vector<uint8_t> flipped(W * H * 3);
-    for (int y = 0; y < H; ++y) std::memcpy(&flipped[y*W*3], &pixels[(H-1-y)*W*3], W*3);
-
-    SDL_Surface* surf = SDL_CreateRGBSurfaceFrom(flipped.data(), W, H, 24, W*3, 0x0000FF, 0x00FF00, 0xFF0000, 0);
-    if (!surf || SDL_SaveBMP(surf, argv[2]) != 0) {
-        std::fprintf(stderr, "SDL_SaveBMP failed: %s\n", SDL_GetError());
-        return 1;
-    }
+    if (!saveScreenshotBMP(argv[2], W, H)) return 1;
     std::printf("saved %s\n", argv[2]);
     return 0;
 }

@@ -2,6 +2,8 @@
 
 #include "camera.h"
 
+#include <cmath>
+
 TEST(wish_delta_forward_at_zero_yaw_moves_along_x) {
     Camera cam;
     cam.yaw = 0.0f;
@@ -29,6 +31,40 @@ TEST(wish_delta_scales_with_dt) {
     cam.wishDelta(1.0f, 0.0f, 0.0f, 1.0f, dx1, dy1, dz1);
     cam.wishDelta(1.0f, 0.0f, 0.0f, 2.0f, dx2, dy2, dz2);
     CHECK_NEAR(dx2, dx1 * 2.0, 1e-3);
+}
+
+// Regression: holding forward and strafe together used to produce a vector of
+// length sqrt(2), making diagonal movement ~41% faster than straight ahead.
+TEST(wish_delta_diagonal_is_not_faster_than_straight) {
+    Camera cam;
+    cam.yaw = 0.0f;
+
+    float fx, fy, fz;
+    cam.wishDelta(1.0f, 0.0f, 0.0f, 1.0f, fx, fy, fz);
+    float straightSpeed = std::sqrt(fx * fx + fy * fy);
+
+    float dx, dy, dz;
+    cam.wishDelta(1.0f, 1.0f, 0.0f, 1.0f, dx, dy, dz);
+    float diagonalSpeed = std::sqrt(dx * dx + dy * dy);
+
+    CHECK_NEAR(diagonalSpeed, straightSpeed, 1e-3);
+}
+
+// Partial (sub-unit) input should still mean partial speed — the clamp must
+// only shorten vectors longer than 1, never stretch shorter ones.
+TEST(wish_delta_preserves_partial_input) {
+    Camera cam;
+    cam.yaw = 0.0f;
+
+    float fx, fy, fz;
+    cam.wishDelta(1.0f, 0.0f, 0.0f, 1.0f, fx, fy, fz);
+    float fullSpeed = std::sqrt(fx * fx + fy * fy);
+
+    float hx, hy, hz;
+    cam.wishDelta(0.5f, 0.0f, 0.0f, 1.0f, hx, hy, hz);
+    float halfSpeed = std::sqrt(hx * hx + hy * hy);
+
+    CHECK_NEAR(halfSpeed, fullSpeed * 0.5, 1e-3);
 }
 
 TEST(look_clamps_pitch_to_89_degrees) {

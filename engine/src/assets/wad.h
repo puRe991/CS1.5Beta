@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "limits.h"
+
 // Decoded GoldSrc texture (mip level 0 only), always RGBA8.
 struct WadTexture {
     std::string name;

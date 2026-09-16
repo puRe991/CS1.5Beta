@@ -209,6 +209,9 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
             if ((size_t)(4 + (i + 1) * 4) > texData.size()) break;
             int32_t ofs = offsets[i];
             if (ofs < 0 || (size_t)(ofs + (int32_t)sizeof(MipTexHeader)) > texData.size()) continue;
+            // The header is read in place, so an unaligned offset would be
+            // undefined behaviour; malformed lumps are skipped, not read.
+            if ((reinterpret_cast<uintptr_t>(texData.data()) + ofs) % alignof(MipTexHeader) != 0) continue;
 
             const MipTexHeader* mip = reinterpret_cast<const MipTexHeader*>(texData.data() + ofs);
             std::string name(mip->name, strnlen(mip->name, sizeof(mip->name)));
@@ -218,15 +221,20 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
             tex.width = mip->width;
             tex.height = mip->height;
 
-            if (mip->offsets[0] != 0) {
+            if (mip->offsets[0] != 0 && mip->width <= kMaxTextureDim && mip->height <= kMaxTextureDim) {
                 // Embedded pixel data + palette, same layout as a WAD3 miptex lump.
-                const uint8_t* base = texData.data() + ofs;
                 size_t indexCount = (size_t)mip->width * mip->height;
-                const uint8_t* indices = base + mip->offsets[0];
                 size_t mip3Size = (mip->width / 8) * (mip->height / 8);
-                const uint8_t* palette = base + mip->offsets[3] + mip3Size + 2;
+                size_t pixelEnd = (size_t)mip->offsets[0] + indexCount;
+                size_t paletteEnd = (size_t)mip->offsets[3] + mip3Size + 2 + 256 * 3;
 
-                if (ofs + (int32_t)(mip->offsets[3] + mip3Size + 2 + 256 * 3) <= (int32_t)texData.size()) {
+                // Both the mip-0 indices and the palette must lie inside the lump.
+                if ((size_t)ofs + pixelEnd <= texData.size() &&
+                    (size_t)ofs + paletteEnd <= texData.size()) {
+                    const uint8_t* base = texData.data() + ofs;
+                    const uint8_t* indices = base + mip->offsets[0];
+                    const uint8_t* palette = base + mip->offsets[3] + mip3Size + 2;
+
                     tex.rgba.resize(indexCount * 4);
                     for (size_t p = 0; p < indexCount; ++p) {
                         uint8_t idx = indices[p];
@@ -298,8 +306,16 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
         face.textureIndex = ti.miptexIndex;
 
         for (int16_t e = 0; e < df.numEdges; ++e) {
-            int32_t se = surfEdges[df.firstEdge + e];
-            uint16_t vi = se >= 0 ? edges[se].v[0] : edges[-se].v[1];
+            // Every index here comes straight from the file, so each hop
+            // (face -> surfedge -> edge -> vertex) is range-checked before use.
+            int64_t surfEdgeIndex = (int64_t)df.firstEdge + e;
+            if (surfEdgeIndex < 0 || (uint64_t)surfEdgeIndex >= numSurfEdges) continue;
+
+            int32_t se = surfEdges[surfEdgeIndex];
+            int64_t edgeIndex = se >= 0 ? se : -(int64_t)se;
+            if ((uint64_t)edgeIndex >= numEdges) continue;
+
+            uint16_t vi = se >= 0 ? edges[edgeIndex].v[0] : edges[edgeIndex].v[1];
             if (vi >= numVertices) continue;
             Vec3 v = vertices[vi];
             face.vertices.push_back(v);
@@ -313,8 +329,6 @@ bool BspMap::load(const std::string& path, const std::vector<std::string>& exter
         if (face.vertices.size() >= 3) faces_.push_back(std::move(face));
     }
 
-    (void)numEdges;
-    (void)numSurfEdges;
     return true;
 }
 
@@ -327,8 +341,14 @@ int BspMap::modelIndexFor(const BspEntity& ent) {
 bool BspMap::pointInSolid(Vec3 point) const {
     if (hull1HeadNode_ < 0 || clipNodes_.empty()) return false;
 
+    // A well-formed tree descends strictly toward a leaf, so it can never visit
+    // more nodes than exist. The step counter bounds a malformed or cyclic
+    // clipnode graph (a child pointing at an ancestor), which would otherwise
+    // spin here forever and hang the engine on a corrupt map.
     int32_t node = hull1HeadNode_;
-    while (node >= 0) {
+    for (size_t steps = 0; node >= 0; ++steps) {
+        if (steps >= clipNodes_.size() || (size_t)node >= clipNodes_.size()) return false;
+
         const ClipNode& cn = clipNodes_[node];
         if (cn.planeNum < 0 || (size_t)cn.planeNum >= planes_.size()) return false;
         const Plane& pl = planes_[cn.planeNum];

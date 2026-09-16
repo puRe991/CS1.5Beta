@@ -50,13 +50,18 @@ engine/
   src/
     core / main.cpp   # entry point, render loop
     camera.{h,cpp}     # free-fly camera (Z-up, matches GoldSrc coordinates)
+    player.{h,cpp}      # player movement: wall sliding, ground check, jump, gravity
     mat4.h              # minimal lookAt/perspective matrix math (no GLU/GLM dependency)
+    entities.{h,cpp}     # BSP entity lump -> spawns, bomb targets, buy zones
     menu_main.cpp        # CS:GO-inspired main menu (Play/Watch/Inventory/Store)
     inventory.{h,cpp}    # fictive-currency skin/case economy + case-opening RNG
+    render/
+      render.{h,cpp}      # shared GL drawing: texture upload, BSP/MDL draw, screenshots
     ui/
       ui.{h,cpp}          # minimal immediate-mode 2D UI (rects, buttons, text)
       font5x7.h            # built-in 5x7 bitmap font (our own, not copied)
     assets/
+      limits.h           # shared sanity caps for untrusted asset headers
       pak.{h,cpp}        # Quake-style PAK archive reader
       wad.{h,cpp}        # WAD3 texture package parser (palette-indexed -> RGBA8)
       bsp.{h,cpp}        # BSP v30 map parser: geometry, textures, entities, hull collision
@@ -65,7 +70,22 @@ engine/
       mapshot.cpp        # standalone map screenshot tool
       modelshot.cpp      # standalone model screenshot tool
       mdlbatchtest.cpp   # batch-load a list of .mdl files, report pass/fail per file
+  tests/                 # unit tests (CTest), run headless — no SDL/GL needed
+    test_framework.h     # tiny header-only test harness (no external dependency)
+    fixtures.h           # builds synthetic PAK/WAD3/BSP/MDL files in memory
 ```
+
+## Tests
+
+```
+cd engine/build
+ctest --output-on-failure
+```
+
+The parsers are exercised against synthetic binary fixtures generated at test
+time, so no game data is needed (or shipped). The suite is also clean under
+`-fsanitize=address,undefined`, which is the intended way to run it when
+touching any of the asset loaders.
 
 ## Status: what works today
 

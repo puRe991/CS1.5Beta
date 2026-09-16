@@ -1,4 +1,5 @@
 #include "mdl.h"
+#include "limits.h"
 
 #include <cmath>
 #include <cstdio>
@@ -123,6 +124,23 @@ void apply(const BoneXform& x, float vx, float vy, float vz, float& ox, float& o
     oz = x.r[2][0]*vx + x.r[2][1]*vy + x.r[2][2]*vz + x.t[2];
 }
 
+// Every offset/count pair in a studio header comes from the file, so each one
+// is validated before it is turned into a pointer. Returns nullptr when the
+// requested span doesn't fit inside the loaded data.
+template <typename T>
+const T* spanAt(const std::vector<uint8_t>& data, int32_t offset, int32_t count) {
+    if (offset < 0 || count <= 0) return nullptr;
+    size_t start = (size_t)offset;
+    if (start > data.size()) return nullptr;
+    // Division instead of multiplication, so a huge count can't overflow.
+    if ((size_t)count > (data.size() - start) / sizeof(T)) return nullptr;
+    // The struct is read straight out of the buffer, so a misaligned offset
+    // would be undefined behaviour. Real models are always aligned; anything
+    // else is malformed and gets rejected rather than read.
+    if ((reinterpret_cast<uintptr_t>(data.data()) + start) % alignof(T) != 0) return nullptr;
+    return reinterpret_cast<const T*>(data.data() + start);
+}
+
 } // namespace
 
 bool MdlModel::load(const std::string& path) {
@@ -145,17 +163,20 @@ bool MdlModel::load(const std::string& path) {
     if (std::memcmp(&hdr->ident, "IDST", 4) != 0 || hdr->version != 10) return false;
 
     // --- Bones: compute a world-space bind-pose transform for each ---
-    const StudioBone* bones = reinterpret_cast<const StudioBone*>(data.data() + hdr->boneIndex);
-    std::vector<BoneXform> boneWorld(hdr->numBones);
-    for (int32_t i = 0; i < hdr->numBones; ++i) {
+    const StudioBone* bones = spanAt<StudioBone>(data, hdr->boneIndex, hdr->numBones);
+    std::vector<BoneXform> boneWorld(bones ? hdr->numBones : 0);
+    for (int32_t i = 0; bones && i < hdr->numBones; ++i) {
         BoneXform local = makeLocal(bones[i].value);
-        boneWorld[i] = bones[i].parent >= 0 ? compose(boneWorld[bones[i].parent], local) : local;
+        // A parent must already be resolved, i.e. appear earlier in the list;
+        // anything else (forward or self reference) is treated as rootless.
+        bool validParent = bones[i].parent >= 0 && bones[i].parent < i;
+        boneWorld[i] = validParent ? compose(boneWorld[bones[i].parent], local) : local;
     }
 
     // --- Textures ---
     textures_.clear();
-    const StudioTexture* studioTex = reinterpret_cast<const StudioTexture*>(data.data() + hdr->textureIndex);
-    for (int32_t i = 0; i < hdr->numTextures; ++i) {
+    const StudioTexture* studioTex = spanAt<StudioTexture>(data, hdr->textureIndex, hdr->numTextures);
+    for (int32_t i = 0; studioTex && i < hdr->numTextures; ++i) {
         const StudioTexture& st = studioTex[i];
         MdlTexture tex;
         tex.name.assign(st.name, strnlen(st.name, sizeof(st.name)));
@@ -163,7 +184,9 @@ bool MdlModel::load(const std::string& path) {
         tex.height = (uint32_t)st.height;
 
         size_t pixelCount = (size_t)st.width * st.height;
-        if ((size_t)st.index + pixelCount + 256 * 3 <= data.size()) {
+        bool sane = st.width > 0 && st.height > 0 &&
+                    (uint32_t)st.width <= kMaxTextureDim && (uint32_t)st.height <= kMaxTextureDim;
+        if (sane && spanAt<uint8_t>(data, st.index, (int32_t)(pixelCount + 256 * 3))) {
             const uint8_t* pixels = data.data() + st.index;
             const uint8_t* palette = pixels + pixelCount;
             bool masked = (st.flags & kStudioNfMasked) != 0;
@@ -181,45 +204,56 @@ bool MdlModel::load(const std::string& path) {
     }
 
     // Skin family 0: skinref -> texture index.
-    const int16_t* skinRefs = reinterpret_cast<const int16_t*>(data.data() + hdr->skinIndex);
+    const int16_t* skinRefs = spanAt<int16_t>(data, hdr->skinIndex, hdr->numSkinRef);
 
     // --- Body parts: geometry, using submodel 0 of each (default variant) ---
     triangles_.clear();
-    const StudioBodyPart* bodyParts = reinterpret_cast<const StudioBodyPart*>(data.data() + hdr->bodyPartIndex);
+    const StudioBodyPart* bodyParts = spanAt<StudioBodyPart>(data, hdr->bodyPartIndex, hdr->numBodyParts);
+    const int16_t* cmdsEnd = reinterpret_cast<const int16_t*>(data.data() + data.size());
 
-    for (int32_t bp = 0; bp < hdr->numBodyParts; ++bp) {
+    for (int32_t bp = 0; bodyParts && bp < hdr->numBodyParts; ++bp) {
         const StudioBodyPart& part = bodyParts[bp];
         if (part.numModels <= 0) continue;
-        const StudioModel* model = reinterpret_cast<const StudioModel*>(data.data() + part.modelIndex);
+        const StudioModel* model = spanAt<StudioModel>(data, part.modelIndex, 1);
+        if (!model) continue;
 
-        const float* verts = reinterpret_cast<const float*>(data.data() + model->vertIndex);
-        const uint8_t* vertBoneIndex = data.data() + model->vertInfoIndex;
+        // Bound numVerts before it is multiplied: numVerts * 3 on a wild value
+        // could overflow int32 back into a small positive count, which would
+        // pass the span check while the loop below still ran the full count.
+        const int32_t numVerts = model->numVerts;
+        if (numVerts <= 0 || (size_t)numVerts > data.size() / sizeof(float) / 3) continue;
 
-        std::vector<float> worldVerts(model->numVerts * 3);
-        for (int32_t v = 0; v < model->numVerts; ++v) {
+        const float* verts = spanAt<float>(data, model->vertIndex, numVerts * 3);
+        const uint8_t* vertBoneIndex = spanAt<uint8_t>(data, model->vertInfoIndex, numVerts);
+        if (!verts || !vertBoneIndex || boneWorld.empty()) continue;
+        std::vector<float> worldVerts((size_t)numVerts * 3);
+        for (int32_t v = 0; v < numVerts; ++v) {
             uint8_t boneIdx = vertBoneIndex[v];
             if (boneIdx >= boneWorld.size()) boneIdx = 0;
             apply(boneWorld[boneIdx], verts[v*3+0], verts[v*3+1], verts[v*3+2],
                   worldVerts[v*3+0], worldVerts[v*3+1], worldVerts[v*3+2]);
         }
 
-        const StudioMesh* meshes = reinterpret_cast<const StudioMesh*>(data.data() + model->meshIndex);
-        for (int32_t m = 0; m < model->numMesh; ++m) {
+        const StudioMesh* meshes = spanAt<StudioMesh>(data, model->meshIndex, model->numMesh);
+        for (int32_t m = 0; meshes && m < model->numMesh; ++m) {
             const StudioMesh& mesh = meshes[m];
-            int textureIndex = (mesh.skinRef >= 0 && mesh.skinRef < hdr->numSkinRef) ? skinRefs[mesh.skinRef] : -1;
-            float texW = 1, texH = 1;
-            if (textureIndex >= 0 && (size_t)textureIndex < textures_.size()) {
-                texW = (float)textures_[textureIndex].width;
-                texH = (float)textures_[textureIndex].height;
-            }
+            int textureIndex = (skinRefs && mesh.skinRef >= 0 && mesh.skinRef < hdr->numSkinRef)
+                                   ? skinRefs[mesh.skinRef] : -1;
 
-            const int16_t* cmds = reinterpret_cast<const int16_t*>(data.data() + mesh.triIndex);
-            while (int16_t count = *cmds++) {
+            const int16_t* cmds = spanAt<int16_t>(data, mesh.triIndex, 1);
+            // The command stream is length-prefixed per run and terminated by a
+            // zero count, with no total size in the header — so the end of the
+            // file is the only hard bound, and every read is checked against it.
+            while (cmds && cmds < cmdsEnd) {
+                int16_t count = *cmds++;
+                if (count == 0) break;
+
                 bool isStrip = count > 0;
-                int n = std::abs((int)count);
+                int n = count > 0 ? count : -count;
+                if ((ptrdiff_t)n * 4 > cmdsEnd - cmds) break; // 4 int16 per vertex
 
-                std::vector<MdlVertex> verts2;
-                verts2.reserve(n);
+                std::vector<MdlVertex> runVerts;
+                runVerts.reserve(n);
                 for (int i = 0; i < n; ++i) {
                     int16_t vi = cmds[0];
                     // cmds[1] is the normal index, unused (unlit rendering for now).
@@ -227,28 +261,29 @@ bool MdlModel::load(const std::string& path) {
                     int16_t t = cmds[3];
                     cmds += 4;
 
-                    MdlVertex mv;
-                    mv.x = worldVerts[vi*3+0];
-                    mv.y = worldVerts[vi*3+1];
-                    mv.z = worldVerts[vi*3+2];
+                    MdlVertex mv{};
+                    if (vi >= 0 && vi < numVerts) {
+                        mv.x = worldVerts[vi*3+0];
+                        mv.y = worldVerts[vi*3+1];
+                        mv.z = worldVerts[vi*3+2];
+                    }
                     mv.u = (float)s;
                     mv.v = (float)t;
-                    verts2.push_back(mv);
+                    runVerts.push_back(mv);
                 }
 
                 for (int i = 2; i < n; ++i) {
                     MdlTriangle tri;
                     if (isStrip) {
-                        if (i % 2 == 0) { tri.a = verts2[i-2]; tri.b = verts2[i-1]; tri.c = verts2[i]; }
-                        else            { tri.a = verts2[i-1]; tri.b = verts2[i-2]; tri.c = verts2[i]; }
+                        if (i % 2 == 0) { tri.a = runVerts[i-2]; tri.b = runVerts[i-1]; tri.c = runVerts[i]; }
+                        else            { tri.a = runVerts[i-1]; tri.b = runVerts[i-2]; tri.c = runVerts[i]; }
                     } else {
-                        tri.a = verts2[0]; tri.b = verts2[i-1]; tri.c = verts2[i];
+                        tri.a = runVerts[0]; tri.b = runVerts[i-1]; tri.c = runVerts[i];
                     }
                     tri.textureIndex = textureIndex;
                     triangles_.push_back(tri);
                 }
             }
-            (void)texW; (void)texH;
         }
         // Only submodel 0 of each bodypart is used (the default variant).
     }

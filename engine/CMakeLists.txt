@@ -11,10 +11,12 @@ add_executable(cs15engine
     src/main.cpp
     src/camera.cpp
     src/entities.cpp
+    src/player.cpp
     src/assets/pak.cpp
     src/assets/wad.cpp
     src/assets/bsp.cpp
     src/assets/mdl.cpp
+    src/render/render.cpp
     src/ui/ui.cpp
 )
 
@@ -26,6 +28,8 @@ add_executable(mapshot
     src/tools/mapshot.cpp
     src/assets/bsp.cpp
     src/assets/wad.cpp
+    src/assets/mdl.cpp
+    src/render/render.cpp
 )
 target_include_directories(mapshot PRIVATE ${SDL2_INCLUDE_DIRS} src)
 target_link_libraries(mapshot PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
@@ -34,6 +38,9 @@ target_link_libraries(mapshot PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
 add_executable(modelshot
     src/tools/modelshot.cpp
     src/assets/mdl.cpp
+    src/assets/bsp.cpp
+    src/assets/wad.cpp
+    src/render/render.cpp
 )
 target_include_directories(modelshot PRIVATE ${SDL2_INCLUDE_DIRS} src)
 target_link_libraries(modelshot PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
@@ -52,6 +59,9 @@ add_executable(csmenu
     src/ui/ui.cpp
     src/inventory.cpp
     src/assets/mdl.cpp
+    src/assets/bsp.cpp
+    src/assets/wad.cpp
+    src/render/render.cpp
 )
 target_include_directories(csmenu PRIVATE ${SDL2_INCLUDE_DIRS} src)
 target_link_libraries(csmenu PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
@@ -73,3 +83,4 @@ add_unit_test(test_wad src/assets/wad.cpp)
 add_unit_test(test_bsp src/assets/bsp.cpp src/assets/wad.cpp)
 add_unit_test(test_mdl src/assets/mdl.cpp)
 add_unit_test(test_entities src/entities.cpp src/assets/bsp.cpp src/assets/wad.cpp)
+add_unit_test(test_player src/player.cpp src/camera.cpp src/assets/bsp.cpp src/assets/wad.cpp)

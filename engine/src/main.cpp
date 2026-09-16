@@ -1,79 +1,16 @@
 #include <SDL2/SDL.h>
 #include <GL/gl.h>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <vector>
 
 #include "camera.h"
 #include "mat4.h"
 #include "entities.h"
+#include "player.h"
 #include "assets/bsp.h"
 #include "assets/mdl.h"
+#include "render/render.h"
 #include "ui/ui.h"
-
-namespace {
-
-GLuint uploadTextureRGBA(const uint8_t* rgba, uint32_t width, uint32_t height) {
-    GLuint id = 0;
-    glGenTextures(1, &id);
-    glBindTexture(GL_TEXTURE_2D, id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
-    if (rgba) {
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
-    } else {
-        uint8_t pixels[16] = {
-            255,0,255,255,  0,0,0,255,
-            0,0,0,255,      255,0,255,255,
-        };
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    }
-    return id;
-}
-
-GLuint uploadTexture(const BspTexture& tex) {
-    return uploadTextureRGBA(tex.rgba.empty() ? nullptr : tex.rgba.data(), tex.width, tex.height);
-}
-
-GLuint uploadTexture(const MdlTexture& tex) {
-    return uploadTextureRGBA(tex.rgba.empty() ? nullptr : tex.rgba.data(), tex.width, tex.height);
-}
-
-Vec3f parseOrigin(const std::string& s) {
-    Vec3f v{0, 0, 0};
-    std::sscanf(s.c_str(), "%f %f %f", &v.x, &v.y, &v.z);
-    return v;
-}
-
-void drawMdlTriangles(const MdlModel& model, const std::vector<GLuint>& texIds) {
-    GLuint currentTex = (GLuint)-1;
-    glBegin(GL_TRIANGLES);
-    for (const auto& tri : model.triangles()) {
-        GLuint texId = (tri.textureIndex >= 0 && (size_t)tri.textureIndex < texIds.size()) ? texIds[tri.textureIndex] : 0;
-        if (texId != currentTex) {
-            glEnd();
-            glBindTexture(GL_TEXTURE_2D, texId);
-            currentTex = texId;
-            glBegin(GL_TRIANGLES);
-        }
-        float texW = 64, texH = 64;
-        if (tri.textureIndex >= 0 && (size_t)tri.textureIndex < model.textures().size()) {
-            texW = (float)model.textures()[tri.textureIndex].width;
-            texH = (float)model.textures()[tri.textureIndex].height;
-        }
-        for (const MdlVertex* v : {&tri.a, &tri.b, &tri.c}) {
-            glTexCoord2f(v->u / texW, v->v / texH);
-            glVertex3f(v->x, v->y, v->z);
-        }
-    }
-    glEnd();
-}
-
-} // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
@@ -139,15 +76,9 @@ int main(int argc, char** argv) {
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_TEXTURE_2D);
 
-    std::vector<GLuint> texIds;
-    texIds.reserve(map.textures().size());
-    for (const auto& tex : map.textures()) texIds.push_back(uploadTexture(tex));
-
+    std::vector<GLuint> texIds = uploadTextures(map.textures());
     std::vector<GLuint> viewModelTexIds;
-    if (hasViewModel) {
-        viewModelTexIds.reserve(viewModel.textures().size());
-        for (const auto& tex : viewModel.textures()) viewModelTexIds.push_back(uploadTexture(tex));
-    }
+    if (hasViewModel) viewModelTexIds = uploadTextures(viewModel.textures());
 
     EntitySystem entities;
     entities.build(map);
@@ -175,11 +106,7 @@ int main(int argc, char** argv) {
     Uint64 lastTicks = SDL_GetPerformanceCounter();
     bool running = true;
 
-    // --- Player physics state ---
-    constexpr float kGravity = 800.0f;   // units/sec^2, Source-ish
-    constexpr float kJumpSpeed = 300.0f; // units/sec, initial upward velocity
-    float velocityZ = 0.0f;
-    bool grounded = false;
+    PlayerState player;
     bool spaceWasDown = false;
 
     // --- Weapon test state ---
@@ -217,48 +144,15 @@ int main(int argc, char** argv) {
         bool jumpPressed = spaceDown && !spaceWasDown;
         spaceWasDown = spaceDown;
 
-        float dx, dy, dzUnused;
-        camera.wishDelta(forward, strafe, 0.0f, dt, dx, dy, dzUnused);
-
-        // Resolve X/Y independently against the map's player hull so
-        // movement slides along walls instead of stopping dead on contact.
-        Vec3 candidate{camera.x, camera.y, camera.z};
-        candidate.x += dx;
-        if (map.pointInSolid(candidate)) candidate.x = camera.x;
-        candidate.y += dy;
-        if (map.pointInSolid(candidate)) candidate.y = camera.y;
-
-        // Ground check: probe just below the resolved feet position.
-        Vec3 groundProbe = candidate;
-        groundProbe.z -= 2.0f;
-        grounded = map.pointInSolid(groundProbe);
-
-        if (jumpPressed && grounded) {
-            velocityZ = kJumpSpeed;
-            grounded = false;
-        } else if (grounded && velocityZ <= 0.0f) {
-            velocityZ = 0.0f;
-        } else {
-            velocityZ -= kGravity * dt;
-        }
-
-        candidate.z += velocityZ * dt;
-        if (map.pointInSolid(candidate)) {
-            if (velocityZ < 0.0f) grounded = true;
-            velocityZ = 0.0f;
-            candidate.z = camera.z; // cancel this step's vertical move, snap to prior floor/ceiling
-        }
-
-        camera.x = candidate.x;
-        camera.y = candidate.y;
-        camera.z = candidate.z;
+        playerStep(camera, player, map, PlayerInput{forward, strafe, jumpPressed}, dt);
 
 #ifdef CS15_DEBUG_PHYSICS
         static float debugTimer = 0.0f;
         debugTimer += dt;
         if (debugTimer >= 0.5f) {
             debugTimer = 0.0f;
-            std::fprintf(stderr, "t=%.1f z=%.2f velZ=%.1f grounded=%d\n", (float)SDL_GetTicks() / 1000.0f, camera.z, velocityZ, grounded);
+            std::fprintf(stderr, "t=%.1f z=%.2f velZ=%.1f grounded=%d\n",
+                         (float)SDL_GetTicks() / 1000.0f, camera.z, player.velocityZ, player.grounded);
         }
 #endif
 
@@ -301,24 +195,7 @@ int main(int argc, char** argv) {
         glMatrixMode(GL_MODELVIEW);
         glLoadMatrixf(view.m);
 
-        for (const auto& face : map.faces()) {
-            GLuint texId = (face.textureIndex >= 0 && (size_t)face.textureIndex < texIds.size()) ? texIds[face.textureIndex] : 0;
-            float texW = 64, texH = 64;
-            if (face.textureIndex >= 0 && (size_t)face.textureIndex < map.textures().size()) {
-                texW = (float)map.textures()[face.textureIndex].width;
-                texH = (float)map.textures()[face.textureIndex].height;
-            }
-            glBindTexture(GL_TEXTURE_2D, texId);
-
-            glBegin(GL_POLYGON);
-            for (size_t i = 0; i < face.vertices.size(); ++i) {
-                float u = face.texCoords[i * 2 + 0] / (texW > 0 ? texW : 1);
-                float v = face.texCoords[i * 2 + 1] / (texH > 0 ? texH : 1);
-                glTexCoord2f(u, v);
-                glVertex3f(face.vertices[i].x, face.vertices[i].y, face.vertices[i].z);
-            }
-            glEnd();
-        }
+        drawBspFaces(map, texIds);
 
         // Bullet impact marks: small dark points on whatever they hit.
         glDisable(GL_TEXTURE_2D);
@@ -386,15 +263,7 @@ int main(int argc, char** argv) {
         SDL_GL_SwapWindow(window);
 
         if (!screenshotPath.empty()) {
-            std::vector<uint8_t> pixels(kWidth * kHeight * 3);
-            glReadPixels(0, 0, kWidth, kHeight, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
-            std::vector<uint8_t> flipped(kWidth * kHeight * 3);
-            for (int y = 0; y < kHeight; ++y) {
-                std::memcpy(&flipped[y * kWidth * 3], &pixels[(kHeight - 1 - y) * kWidth * 3], kWidth * 3);
-            }
-            SDL_Surface* surf = SDL_CreateRGBSurfaceFrom(flipped.data(), kWidth, kHeight, 24, kWidth * 3, 0x0000FF, 0x00FF00, 0xFF0000, 0);
-            if (surf) SDL_SaveBMP(surf, screenshotPath.c_str());
-            if (surf) SDL_FreeSurface(surf);
+            saveScreenshotBMP(screenshotPath, kWidth, kHeight);
             running = false; // one-shot verification run
         }
     }

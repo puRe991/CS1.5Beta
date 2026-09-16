@@ -85,7 +85,10 @@ bool WadFile::decodeTexture(size_t index, WadTexture& out) const {
         return false;
     }
 
-    if (mip.width == 0 || mip.height == 0 || mip.offsets[0] == 0) {
+    // Guard against a corrupt header asking for an absurd allocation before
+    // the fread checks below ever get a chance to reject it.
+    if (mip.width == 0 || mip.height == 0 || mip.offsets[0] == 0 ||
+        mip.width > kMaxTextureDim || mip.height > kMaxTextureDim) {
         std::fclose(f);
         return false;
     }

@@ -6,6 +6,7 @@
 #include <GL/gl.h>
 #include <algorithm>
 #include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -19,6 +20,7 @@
 #include "ui/ui.h"
 #include "inventory.h"
 #include "assets/mdl.h"
+#include "render/render.h"
 
 namespace {
 
@@ -119,6 +121,9 @@ std::string exeDir(const char* argv0) {
 }
 
 // Launches cs15engine as a detached child process for the chosen map.
+// The caller must have set SIGCHLD to SIG_IGN so exited children are reaped
+// automatically — the menu never waits on them, and without that every
+// launched game would linger as a zombie for the menu's whole lifetime.
 void launchMap(const std::string& exeDirPath, const std::string& cstrikeDir, const std::string& mapName) {
     pid_t pid = fork();
     if (pid == 0) {
@@ -130,7 +135,9 @@ void launchMap(const std::string& exeDirPath, const std::string& cstrikeDir, con
         std::fprintf(stderr, "launchMap: execl(%s) failed: %s\n", enginePath.c_str(), std::strerror(errno));
         std::_Exit(127); // execl only returns on failure
     }
-    // Parent (the menu) keeps running; the child is left to the OS/init to reap.
+    if (pid < 0) {
+        std::fprintf(stderr, "launchMap: fork failed: %s\n", std::strerror(errno));
+    }
 }
 
 } // namespace
@@ -141,6 +148,8 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::srand((unsigned)std::time(nullptr));
+    // Auto-reap launched games; the menu never waits on them (see launchMap).
+    std::signal(SIGCHLD, SIG_IGN);
     std::string cstrikeDir = argv[1];
     std::string modelsDir = cstrikeDir + "/models";
     std::string menuExeDir = exeDir(argv[0]);
@@ -365,8 +374,15 @@ int main(int argc, char** argv) {
                     uiDrawText(kWidth / 2.0f - uiTextWidth(spinning.skinName) / 2.0f, 370, spinning.skinName, kColorWhite, 1.5f);
                 }
                 if (spinTimer >= kSpinDuration && openingCase) {
-                    openCase(econ, *openingCase, revealResult);
-                    revealDone = true;
+                    // Only reveal what was actually rolled: if no case of this
+                    // type is owned, openCase leaves revealResult untouched, so
+                    // showing it anyway would display a stale/blank skin.
+                    if (openCase(econ, *openingCase, revealResult)) {
+                        revealDone = true;
+                    } else {
+                        openingCase = nullptr;
+                        screen = Screen::Inventory;
+                    }
                 }
             } else {
                 Color rc = rarityColor(revealResult.skin.rarity);
@@ -387,14 +403,7 @@ int main(int argc, char** argv) {
         SDL_GL_SwapWindow(window);
 
         if (!screenshotPath.empty()) {
-            std::vector<uint8_t> pixels(kWidth * kHeight * 3);
-            glReadPixels(0, 0, kWidth, kHeight, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
-            std::vector<uint8_t> flipped(kWidth * kHeight * 3);
-            for (int y = 0; y < kHeight; ++y) {
-                for (int x = 0; x < kWidth * 3; ++x) flipped[y * kWidth * 3 + x] = pixels[(kHeight - 1 - y) * kWidth * 3 + x];
-            }
-            SDL_Surface* surf = SDL_CreateRGBSurfaceFrom(flipped.data(), kWidth, kHeight, 24, kWidth * 3, 0x0000FF, 0x00FF00, 0xFF0000, 0);
-            if (surf) { SDL_SaveBMP(surf, screenshotPath.c_str()); SDL_FreeSurface(surf); }
+            saveScreenshotBMP(screenshotPath, kWidth, kHeight);
             running = false;
         }
     }
