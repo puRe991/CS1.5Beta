@@ -25,6 +25,8 @@
 #include "render/particles.h"
 #include "render/decals.h"
 #include "audio/audio.h"
+#include "bots.h"
+#include "hitboxes.h"
 
 namespace {
 const char* kWorldVertexShader = R"(#version 120
@@ -418,6 +420,30 @@ int main(int argc, char** argv) {
     // there's no team-select screen or other players to balance against yet.
     PlayerState player;
 
+    // --- Bots: the opposing side, spawned once at startup. Fixed to the
+    // team opposite the player's *starting* team — switching teams at
+    // runtime with 'N' doesn't re-team the bots, since that debug key
+    // predates bots existing at all and isn't meant to model a real match.
+    // See bots.h for what this AI actually does and doesn't cover.
+    Team botTeam = player.team == Team::CT ? Team::T : Team::CT;
+    MdlModel botBodyModel;
+    std::vector<GLuint> botBodyTexIds;
+    bool hasBotBodyModel = false;
+    {
+        std::string path = wadDir + "/models/player/" + (botTeam == Team::CT ? "urban/urban.mdl" : "terror/terror.mdl");
+        hasBotBodyModel = botBodyModel.load(path);
+        if (hasBotBodyModel) {
+            botBodyTexIds.reserve(botBodyModel.textures().size());
+            for (const auto& tex : botBodyModel.textures()) botBodyTexIds.push_back(uploadTexture(tex));
+        }
+    }
+    int botIdleSeq = hasBotBodyModel ? botBodyModel.findSequence("idle1") : -1;
+    int botRunSeq = hasBotBodyModel ? botBodyModel.findSequence("run") : -1;
+    constexpr int kBotCount = 4;
+    BotSystem botSystem;
+    botSystem.spawn(kBotCount, botTeam, entities);
+    int sndBotHit = audio.loadSound(wadDir + "/sound/player/bhit_flesh-1.wav");
+
     Camera camera;
     {
         Vec3 origin{0, 0, 0};
@@ -763,6 +789,27 @@ int main(int argc, char** argv) {
         camera.y = candidate.y;
         camera.z = candidate.z;
 
+        // Bots: perceive, move, and shoot at the player (applying real
+        // damage) — see bots.h for exactly what this does and doesn't
+        // model. Skipped while the round isn't live so bots stand down
+        // during intermission, same as the player's own controls do.
+        if (round.phase == RoundPhase::Live) {
+            Vec3 playerFeet{camera.x, camera.y, camera.z};
+            Vec3 playerEye{camera.x, camera.y, camera.z + (ducked ? kDuckEyeHeight : kEyeHeight)};
+            std::vector<BotFiredEvent> botFires = botSystem.update(dt, map, brushEntities, entities, player, playerEye, playerFeet);
+            for (const BotFiredEvent& fired : botFires) {
+                audio.play3D(sndShootByCategory[(int)WeaponCategory::Rifle],
+                             Vec3f{(float)fired.position.x, (float)fired.position.y, (float)fired.position.z}, 0.9f, 2000.0f);
+                particles.spawn(fxMuzzleFlash, Vec3f{(float)fired.position.x, (float)fired.position.y, (float)fired.position.z}, 0.15f, 0.06f);
+            }
+            // Elimination win: every opposing bot dead and no bomb ticking
+            // (a planted bomb's own timer is still the real win condition,
+            // same rule the player-death check below it already follows).
+            if (!round.bombPlanted && botSystem.aliveCount() == 0) {
+                endRound(round, player, "ELIMINATED");
+            }
+        }
+
         Vec3 respawnOrigin;
         float respawnYaw = 0.0f;
         if (updateRound(round, player, entities, dt, respawnOrigin, respawnYaw)) {
@@ -775,6 +822,7 @@ int main(int argc, char** argv) {
             ammoInMag = weaponByIndex(currentWeaponIndex).magazineSize;
             reserveAmmo = weaponByIndex(currentWeaponIndex).reserveAmmo;
             bombExplosionSpawned = false; // new round: allow the next detonation to spawn its effect
+            botSystem.respawnAll(entities);
         }
         if (round.endReason == "BOMB_EXPLODED" && !bombExplosionSpawned) {
             bombExplosionSpawned = true;
@@ -935,7 +983,8 @@ int main(int argc, char** argv) {
             // breakable — and dealing damage to the one it actually hit,
             // scaled by the equipped weapon's own damage stat.
             constexpr float kBreakableStep = 4.0f;
-            for (float t = 0.0f; t < worldHitDist; t += kBreakableStep) {
+            float bestHitDist = worldHitDist;
+            for (float t = 0.0f; t < bestHitDist; t += kBreakableStep) {
                 Vec3 p{traceStart.x + forwardDir.x * t, traceStart.y + forwardDir.y * t,
                        traceStart.z + forwardDir.z * t};
                 if (brushEntities.pointInSolid(map, p, 0)) {
@@ -950,7 +999,44 @@ int main(int argc, char** argv) {
                     hit = p;
                     hitNormal = Vec3{-forwardDir.x, -forwardDir.y, -forwardDir.z};
                     didHit = true;
+                    bestHitDist = t;
                     break;
+                }
+            }
+
+            // Bots: resolve to the actual per-body-part hitbox a bullet
+            // crosses (assets/mdl.h's poseHitboxes(), transformed into world
+            // space by the bot's own position/facing) rather than a flat
+            // hit/miss on the whole bot — this is what finally puts the
+            // hitbox system (see hitboxes.h) into a live damage path, since
+            // bots are the first opposing entity this engine has ever had.
+            if (hasBotBodyModel) {
+                for (size_t bi = 0; bi < botSystem.bots.size(); ++bi) {
+                    const Bot& bot = botSystem.bots[bi];
+                    if (!bot.alive) continue;
+                    int activeBotSeq = bot.moving && botRunSeq >= 0 ? botRunSeq : botIdleSeq;
+                    std::vector<WorldHitbox> localBoxes;
+                    if (activeBotSeq >= 0) {
+                        const MdlSequence& seq = botBodyModel.sequences()[activeBotSeq];
+                        float frame = std::fmod(bot.animTime * seq.fps, (float)seq.numFrames);
+                        localBoxes = botBodyModel.poseHitboxes(activeBotSeq, frame);
+                    } else {
+                        localBoxes = botBodyModel.poseHitboxes(-1, 0.0f);
+                    }
+                    std::vector<WorldHitbox> worldBoxes = transformHitboxesToWorld(localBoxes, bot.origin, bot.yaw);
+                    HitboxTraceResult r = traceHitboxes(worldBoxes, traceStart, Vec3{forwardDir.x, forwardDir.y, forwardDir.z}, bestHitDist);
+                    if (r.hit) {
+                        bestHitDist = r.distance;
+                        int dmg = (int)std::round(equippedWeapon.damage * r.damageMultiplier);
+                        botSystem.damage(bi, dmg);
+                        hit = Vec3{traceStart.x + forwardDir.x * r.distance, traceStart.y + forwardDir.y * r.distance,
+                                   traceStart.z + forwardDir.z * r.distance};
+                        hitNormal = Vec3{-forwardDir.x, -forwardDir.y, -forwardDir.z};
+                        didHit = true;
+                        audio.play3D(sndBotHit, Vec3f{(float)hit.x, (float)hit.y, (float)hit.z}, 0.8f, 1200.0f);
+                        decals.spawn(bloodDecals, Vec3f{(float)hit.x, (float)hit.y, (float)hit.z},
+                                     Vec3f{(float)hitNormal.x, (float)hitNormal.y, (float)hitNormal.z}, 10.0f);
+                    }
                 }
             }
 
@@ -1067,6 +1153,31 @@ int main(int argc, char** argv) {
             glRotatef(camera.yaw, 0.0f, 0.0f, 1.0f);
             drawMdlTriangles(bodyTriangles, playerBodyModel.textures(), playerBodyTexIds);
             glLoadMatrixf(view.m); // restore: undo the translate/rotate for whatever draws next
+        }
+
+        // Bots: always drawn in third person (there's no first-person view
+        // for them), same pose/translate/rotate approach as the player's
+        // own third-person body above.
+        if (hasBotBodyModel) {
+            for (const Bot& bot : botSystem.bots) {
+                if (!bot.alive) continue;
+                int activeBotSeq = bot.moving && botRunSeq >= 0 ? botRunSeq : botIdleSeq;
+                std::vector<MdlTriangle> botTriangles;
+                if (activeBotSeq >= 0) {
+                    const MdlSequence& seq = botBodyModel.sequences()[activeBotSeq];
+                    float frame = std::fmod(bot.animTime * seq.fps, (float)seq.numFrames);
+                    botTriangles = botBodyModel.pose(activeBotSeq, frame);
+                } else {
+                    botTriangles = botBodyModel.triangles();
+                }
+
+                glMatrixMode(GL_MODELVIEW);
+                glLoadMatrixf(view.m);
+                glTranslatef(bot.origin.x, bot.origin.y, bot.origin.z);
+                glRotatef(bot.yaw, 0.0f, 0.0f, 1.0f);
+                drawMdlTriangles(botTriangles, botBodyModel.textures(), botBodyTexIds);
+                glLoadMatrixf(view.m);
+            }
         }
 
         if (hasViewModel && !thirdPerson) {
@@ -1206,6 +1317,10 @@ int main(int argc, char** argv) {
             else if (round.endReason == "TIME") { bigMsg = "CT WIN - TIME"; bigColor = Color{0.4f, 0.6f, 1.0f, 1.0f}; }
             else if (round.endReason == "BOMB_EXPLODED") { bigMsg = "T WIN - BOMB DETONATED"; bigColor = Color{1.0f, 0.8f, 0.3f, 1.0f}; }
             else if (round.endReason == "BOMB_DEFUSED") { bigMsg = "CT WIN - BOMB DEFUSED"; bigColor = Color{0.4f, 0.6f, 1.0f, 1.0f}; }
+            else if (round.endReason == "ELIMINATED") {
+                bigMsg = player.team == Team::CT ? "CT WIN - ELIMINATION" : "T WIN - ELIMINATION";
+                bigColor = player.team == Team::CT ? Color{0.4f, 0.6f, 1.0f, 1.0f} : Color{1.0f, 0.8f, 0.3f, 1.0f};
+            }
             float w = uiTextWidth(bigMsg, 3.0f);
             uiDrawText((kWidth - w) / 2.0f, kHeight / 2.0f - 60, bigMsg, bigColor, 3.0f);
 

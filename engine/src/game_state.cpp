@@ -42,6 +42,10 @@ void endRound(RoundState& round, const PlayerState& player, const std::string& r
         // The player was eliminated, so the other side takes the round.
         if (player.team == Team::CT) round.tScore += 1;
         else round.ctScore += 1;
+    } else if (reason == "ELIMINATED") {
+        // The opposing bots were all eliminated — the player's own side wins.
+        if (player.team == Team::CT) round.ctScore += 1;
+        else round.tScore += 1;
     }
 }
 
