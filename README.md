@@ -87,7 +87,20 @@ ctest --output-on-failure
 The parsers are exercised against synthetic binary fixtures generated at test
 time, so no game data is needed (or shipped). The suite is also clean under
 `-fsanitize=address,undefined`, which is the intended way to run it when
-touching any of the asset loaders.
+touching any of the asset loaders:
+
+```
+cmake -S engine -B engine/build-asan -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -g"
+cmake --build engine/build-asan -j
+ctest --test-dir engine/build-asan --output-on-failure --timeout 300
+```
+
+CI (`.github/workflows/ci.yml`) runs both of these on every push to `main` and
+every pull request: a normal build plus test run, and the same suite under
+AddressSanitizer/UBSan. Every target is built, tests included, so a test that
+no longer matches the API it exercises fails the build rather than going
+unnoticed.
 
 ## Status: what works today
 

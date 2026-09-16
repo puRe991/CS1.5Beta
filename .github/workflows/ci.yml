@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch supersedes the previous run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsdl2-dev libgl-dev
+
+      - name: Configure
+        run: cmake -S engine -B engine/build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      # Builds every target, tools and tests included — a test that no longer
+      # matches the API it exercises is a build failure, not something to find
+      # out about later.
+      - name: Build
+        run: cmake --build engine/build -j "$(nproc)"
+
+      # --timeout matters: an asset parser that loops forever on malformed
+      # input is a real failure mode here, and should fail fast rather than
+      # run until the job's own limit.
+      - name: Test
+        run: ctest --test-dir engine/build --output-on-failure -j "$(nproc)" --timeout 120
+
+  sanitizers:
+    name: Tests (ASan + UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsdl2-dev libgl-dev
+
+      # -fno-sanitize-recover=all is what actually makes undefined behaviour
+      # fail: without it UBSan prints the error and carries on to exit 0, so a
+      # test would report green with UB underneath it.
+      - name: Configure
+        run: >
+          cmake -S engine -B engine/build-asan
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+
+      - name: Build
+        run: cmake --build engine/build-asan -j "$(nproc)"
+
+      # The parsers read untrusted binary files, so this is the job that guards
+      # them against out-of-bounds reads and UB on malformed input.
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir engine/build-asan --output-on-failure -j "$(nproc)" --timeout 300

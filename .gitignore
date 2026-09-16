@@ -1,2 +1,3 @@
 engine/build/
+engine/build-asan/
 external_assets/cs2_mod_pack/cs2_mod_pack.zip
