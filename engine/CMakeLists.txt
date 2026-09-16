@@ -74,3 +74,21 @@ add_executable(csmenu
 )
 target_include_directories(csmenu PRIVATE ${SDL2_INCLUDE_DIRS} src)
 target_link_libraries(csmenu PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
+
+# Unit tests: pure-logic modules only (asset parsers, entity classification,
+# math, camera) — no SDL/OpenGL context needed, so they run headless in CI.
+enable_testing()
+
+function(add_unit_test name)
+    add_executable(${name} tests/${name}.cpp ${ARGN})
+    target_include_directories(${name} PRIVATE src tests)
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+add_unit_test(test_mat4)
+add_unit_test(test_camera src/camera.cpp)
+add_unit_test(test_pak src/assets/pak.cpp)
+add_unit_test(test_wad src/assets/wad.cpp)
+add_unit_test(test_bsp src/assets/bsp.cpp src/assets/wad.cpp)
+add_unit_test(test_mdl src/assets/mdl.cpp)
+add_unit_test(test_entities src/entities.cpp src/assets/bsp.cpp src/assets/wad.cpp)
