@@ -1,71 +1,13 @@
 #include "test_framework.h"
 
 #include "camera.h"
+#include "cvar.h"
 
 #include <cmath>
 
-TEST(wish_delta_forward_at_zero_yaw_moves_along_x) {
-    Camera cam;
-    cam.yaw = 0.0f;
-    float dx, dy, dz;
-    cam.wishDelta(/*forward=*/1.0f, /*strafe=*/0.0f, /*up=*/0.0f, /*dt=*/1.0f, dx, dy, dz);
-    CHECK(dx > 0.0f);
-    CHECK_NEAR(dy, 0.0, 1e-3);
-    CHECK_NEAR(dz, 0.0, 1e-6);
-}
-
-TEST(wish_delta_up_only_moves_along_z_regardless_of_yaw) {
-    Camera cam;
-    cam.yaw = 37.0f;
-    float dx, dy, dz;
-    cam.wishDelta(0.0f, 0.0f, 1.0f, 2.0f, dx, dy, dz);
-    CHECK_NEAR(dx, 0.0, 1e-6);
-    CHECK_NEAR(dy, 0.0, 1e-6);
-    CHECK(dz > 0.0f);
-}
-
-TEST(wish_delta_scales_with_dt) {
-    Camera cam;
-    cam.yaw = 0.0f;
-    float dx1, dy1, dz1, dx2, dy2, dz2;
-    cam.wishDelta(1.0f, 0.0f, 0.0f, 1.0f, dx1, dy1, dz1);
-    cam.wishDelta(1.0f, 0.0f, 0.0f, 2.0f, dx2, dy2, dz2);
-    CHECK_NEAR(dx2, dx1 * 2.0, 1e-3);
-}
-
-// Regression: holding forward and strafe together used to produce a vector of
-// length sqrt(2), making diagonal movement ~41% faster than straight ahead.
-TEST(wish_delta_diagonal_is_not_faster_than_straight) {
-    Camera cam;
-    cam.yaw = 0.0f;
-
-    float fx, fy, fz;
-    cam.wishDelta(1.0f, 0.0f, 0.0f, 1.0f, fx, fy, fz);
-    float straightSpeed = std::sqrt(fx * fx + fy * fy);
-
-    float dx, dy, dz;
-    cam.wishDelta(1.0f, 1.0f, 0.0f, 1.0f, dx, dy, dz);
-    float diagonalSpeed = std::sqrt(dx * dx + dy * dy);
-
-    CHECK_NEAR(diagonalSpeed, straightSpeed, 1e-3);
-}
-
-// Partial (sub-unit) input should still mean partial speed — the clamp must
-// only shorten vectors longer than 1, never stretch shorter ones.
-TEST(wish_delta_preserves_partial_input) {
-    Camera cam;
-    cam.yaw = 0.0f;
-
-    float fx, fy, fz;
-    cam.wishDelta(1.0f, 0.0f, 0.0f, 1.0f, fx, fy, fz);
-    float fullSpeed = std::sqrt(fx * fx + fy * fy);
-
-    float hx, hy, hz;
-    cam.wishDelta(0.5f, 0.0f, 0.0f, 1.0f, hx, hy, hz);
-    float halfSpeed = std::sqrt(hx * hx + hy * hy);
-
-    CHECK_NEAR(halfSpeed, fullSpeed * 0.5, 1e-3);
-}
+// Camera is now purely orientation: movement moved into the player physics in
+// main.cpp (friction, ground/air acceleration, ducking), which normalizes the
+// wish direction there. What's left to test here is mouse look.
 
 TEST(look_clamps_pitch_to_89_degrees) {
     Camera cam;
@@ -82,7 +24,44 @@ TEST(look_accumulates_yaw) {
     Camera cam;
     cam.look(10.0f, 0.0f);
     cam.look(10.0f, 0.0f);
-    CHECK_NEAR(cam.yaw, 3.0, 1.0); // 0.15 deg/pixel * 20 px = 3 degrees
+    // Default sensitivity 3.0 * 0.05 base = 0.15 deg/pixel, so 20 px = 3 degrees.
+    CHECK_NEAR(cam.yaw, 3.0, 1e-3);
+}
+
+TEST(look_scales_with_sensitivity_cvar) {
+    Cvar* sensitivity = CvarSystem::Get().Find("sensitivity");
+    CHECK(sensitivity != nullptr);
+    if (!sensitivity) return;
+
+    Camera slow;
+    sensitivity->SetString("1.0");
+    slow.look(100.0f, 0.0f);
+
+    Camera fast;
+    sensitivity->SetString("2.0");
+    fast.look(100.0f, 0.0f);
+
+    CHECK_NEAR(fast.yaw, slow.yaw * 2.0, 1e-3);
+
+    sensitivity->SetString("3.0"); // restore the default for other tests
+}
+
+// m_pitch inverts vertical look; a negative value must flip the sign.
+TEST(look_respects_inverted_m_pitch) {
+    Cvar* mPitch = CvarSystem::Get().Find("m_pitch");
+    CHECK(mPitch != nullptr);
+    if (!mPitch) return;
+
+    Camera normal;
+    normal.look(0.0f, 50.0f);
+
+    mPitch->SetString("-1.0");
+    Camera inverted;
+    inverted.look(0.0f, 50.0f);
+
+    CHECK_NEAR(inverted.pitch, -normal.pitch, 1e-3);
+
+    mPitch->SetString("1.0");
 }
 
 int main() { return RUN_ALL_TESTS(); }

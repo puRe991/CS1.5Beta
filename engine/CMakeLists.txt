@@ -10,14 +10,24 @@ find_package(OpenGL REQUIRED)
 add_executable(cs15engine
     src/main.cpp
     src/camera.cpp
+    src/cvar.cpp
+    src/console.cpp
     src/entities.cpp
-    src/player.cpp
+    src/brush_entities.cpp
+    src/game_state.cpp
     src/assets/pak.cpp
     src/assets/wad.cpp
     src/assets/bsp.cpp
     src/assets/mdl.cpp
-    src/render/render.cpp
+    src/assets/spr.cpp
+    src/assets/tga.cpp
     src/ui/ui.cpp
+    src/render/glext.cpp
+    src/render/shader.cpp
+    src/render/world_mesh.cpp
+    src/render/skybox.cpp
+    src/render/particles.cpp
+    src/render/decals.cpp
 )
 
 target_include_directories(cs15engine PRIVATE ${SDL2_INCLUDE_DIRS} src)
@@ -52,6 +62,13 @@ add_executable(mdlbatchtest
 )
 target_include_directories(mdlbatchtest PRIVATE src)
 
+# Debug tool: loads a list of .spr files and reports parse pass/fail per file.
+add_executable(sprbatchtest
+    src/tools/sprbatchtest.cpp
+    src/assets/spr.cpp
+)
+target_include_directories(sprbatchtest PRIVATE src)
+
 # CS:GO-inspired main menu: Play/Watch/Inventory/Store, fictive-currency
 # case-opening economy.
 add_executable(csmenu
@@ -77,10 +94,9 @@ function(add_unit_test name)
 endfunction()
 
 add_unit_test(test_mat4)
-add_unit_test(test_camera src/camera.cpp)
+add_unit_test(test_camera src/camera.cpp src/cvar.cpp)
 add_unit_test(test_pak src/assets/pak.cpp)
 add_unit_test(test_wad src/assets/wad.cpp)
 add_unit_test(test_bsp src/assets/bsp.cpp src/assets/wad.cpp)
 add_unit_test(test_mdl src/assets/mdl.cpp)
 add_unit_test(test_entities src/entities.cpp src/assets/bsp.cpp src/assets/wad.cpp)
-add_unit_test(test_player src/player.cpp src/camera.cpp src/assets/bsp.cpp src/assets/wad.cpp)

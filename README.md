@@ -27,7 +27,9 @@ Requires SDL2 and OpenGL development headers (`libsdl2-dev` on Debian/Ubuntu).
 ./cs15engine <path/to/map.bsp> <path/to/cstrike-dir-with-wads> [path/to/viewmodel.mdl]
 ```
 
-Controls: WASD to move, mouse to look, Space/Ctrl for up/down, Esc to quit.
+Controls: WASD to move, mouse to look, Space to jump, Ctrl to duck, R to
+reload, V to toggle third-person, Tab for the scoreboard, B for the buy
+menu, Esc to quit.
 
 Two debug/verification tools are also built:
 - `./mapshot <map.bsp> <wad_dir> <out.bmp>` — renders one frame of a map to a file.
@@ -107,35 +109,35 @@ touching any of the asset loaders.
 ## To Do — what's still needed for a full, playable Counter-Strike
 
 ### Rendering
-- [ ] Shader-based (programmable pipeline) renderer — currently uses legacy/fixed-function OpenGL, fine for verification but should move to core/3.3+ with shaders for real use
-- [ ] Lightmaps (BSP lighting lump is parsed as raw data but not yet applied — faces render unlit/texture-only)
-- [ ] BSP visibility (PVS) culling for performance on large maps
-- [ ] Sky rendering (skybox/skydome instead of the current flat clear color)
-- [ ] Decals (bullet holes, blood, etc.)
-- [ ] Particle effects (muzzle flashes, explosions, smoke)
-- [ ] SPR sprite format support (used for effects, some HUD elements)
-- [ ] MDL animation playback (currently only the static bind pose renders — no walk/run/shoot animation blending, no sequence system)
-- [ ] MDL attachment points (muzzle flash origin, weapon-to-hand attachment, etc.)
+- [x] Shader-based world rendering: GLSL vertex/fragment shader + one VBO for all BSP geometry (`render/`), replacing per-face `glBegin`/`glEnd`. Bullet marks, the view model, and the 2D UI/HUD still use the legacy fixed-function path (GL 2.1 compatibility profile allows mixing both) — converting those is a follow-up, as is eventually moving to a core 3.3+ context
+- [x] Lightmaps: BSP lighting lump baked into a shared 2048x2048 atlas, multiplied into the base texture in the world shader. Style 0 only — no animated/switchable light styles yet, and no fullbright/runtime relighting.
+- [x] BSP visibility (PVS) culling for performance on large maps — parses the NODES/LEAFS/MARKSURFACES/VISIBILITY lumps, finds the current leaf by walking the render BSP tree from the camera position, decompresses that leaf's RLE-encoded PVS row, and unions every potentially-visible leaf's faces into a per-frame visibility mask (`BspMap::computeVisibleFaces`). `WorldMesh` sorts each texture's faces by leaf at load time so visible runs stay contiguous, then coalesces them into as few `glDrawArrays` calls as possible — a `visibleFaces` bitmask empty (outside the map, or a map with no compiled PVS) falls back to drawing everything, exactly like before this existed. Verified numerically (e.g. de_dust2's CT spawn sees only ~9% of the map's faces, a nearby T spawn ~19%) and visually across several maps (de_dust2, de_dust, cs_office, de_nuke, as_oilrig) — geometry renders identically to before, no missing surfaces or seams, just far less of the map actually submitted per frame.
+- [x] Sky rendering: real 6-face GoldSrc skybox (`assets/tga.*` + `render/skybox.*`), loaded from the worldspawn `skyname` key, drawn camera-centered with depth test off. "sky"-textured faces are excluded from normal geometry so the skybox shows through.
+- [x] Decals (bullet holes, blood, etc.) — a new persistent world-space decal system (`render/decals.{h,cpp}`) replacing the old plain dark impact dot, using the real GoldSrc decal textures (decals.wad's "{shot1-5"/"{blood1-6" lumps). Decal WAD lumps turned out to use a different convention than masked world textures: their palette is a plain grayscale ramp used as a per-pixel alpha mask (index 0 = transparent, 255 = opaque) rather than an index-255 transparency key, discovered by tracing why a first attempt rendered solid white boxes instead of translucent marks — `WadFile::decodeDecalTexture` decodes this correctly with a caller-supplied tint color (near-black for bullet holes, dark red for blood) since the ramp itself carries no real color. Decals orient to the actual surface hit: `BspMap::traceLine` now also reports the clip plane normal at the hit point. Wired to real events (every shot leaves a bullet hole; the 'H' debug damage key leaves a blood splash) and verified visually — a correctly transparent, properly tinted bullet hole and blood splatter both render against real wall geometry. Blood has no NPC/hit-target trigger yet since none exist in this engine (only the local player can take damage).
+- [x] Particle effects (muzzle flashes, explosions, smoke) — a real world-space billboard sprite system (`render/particles.{h,cpp}`) driving the real GoldSrc `.spr` effect assets (muzzleflash2.spr, smokepuff.spr, fexplo.spr) added by the SPR loader: additive/alpha blending per the sprite's own render mode, animated through all its frames over the particle's lifetime, faded in/out at the edges, camera-facing (billboarded against the real view direction, not the view model's screen-locked axes). Wired to real gameplay events — every shot spawns a muzzle flash and, on a hit, a smoke puff at the impact point; a bomb detonation spawns an explosion at the bomb's position. Verified visually: screenshotted a mid-animation explosion frame rendering correctly as a bright additive fireball, plus the muzzle flash glowing correctly at point-blank range.
+- [x] SPR sprite format support (used for effects, some HUD elements) — parses dsprite_t (orientation + render mode) and all frames, decoding the palette to RGBA per the sprite's render mode (normal/additive: opaque; alphatest: index 255 keyed transparent; indexalpha: palette used as a grayscale alpha ramp over white, since there's no per-entity render-color tinting yet). Verified against all 88 .spr files shipped with the game via `sprbatchtest` (0 failures) plus a manual pixel dump confirming an additive muzzle flash and an alphatest HUD sprite both decode correctly. Not yet wired into any renderer — animated group frames (none present in this asset set) are also not handled.
+- [x] MDL animation playback — `MdlModel::pose(sequence, frame)` decodes each sequence's compressed per-bone animation tracks (RLE keyframe streams, GoldSrc's `mstudioanim_t`/`mstudioanimvalue_t` format) and re-skins the mesh at any fractional frame, interpolated between the two nearest keyframes. The view model now actually plays idle/draw/shoot/reload instead of standing in its static bind pose, switching sequences on the real fire/reload/equip events and falling back to idle when a one-shot animation finishes. Verified by rendering both a weapon (v_ak47.mdl idle/shoot, hand+gun bones) and a full player model (urban.mdl walk cycle, opposite mid-stride frames) at multiple frames — all coherent, non-garbled poses — plus a live in-engine screenshot showing the view model in a genuinely different pose after a simulated shot. Directional-blend sequences (9-way aim/shoot sets) are now fully supported too: `pose()` takes a normalized `blend` parameter and linearly interpolates between the two nearest of a sequence's `numBlends` variants — verified against urban.mdl's `ref_aim_ak47` (numBlends=9), rendering a full look-up pose at blend=0, full look-down at blend=1, and a coherent in-between pose at blend=0.5. Player-model animation is now wired into a real (if minimal) renderer too: a 'V' key toggles a third-person chase camera that draws the player's own team skin (urban/terror) at their world position, animated between idle and run via the same pose() system, switching skins on team change — verified with an in-engine screenshot showing the correctly posed, correctly facing body model. Remaining limitations: only sequences embedded in the main file are supported (true of every sequence in this game's asset set, but not of exotic external-seqgroup models like the hostage NPCs, which already fail to load for unrelated reasons), and the third-person chase camera has no collision against world geometry (it can clip into walls in tight spaces).
+- [x] MDL attachment points (muzzle flash origin, weapon-to-hand attachment, etc.) — parsed from `mstudioattachment_t` and transformed through each attachment's owning bone bind-pose (same math path as vertices); the view model's muzzle flash is drawn at attachment 0's real position instead of a fixed offset. Player-model hand attachments are parsed and available via `MdlModel::attachments()`/`findAttachment()`, but the engine has no third-person/other-player rendering yet to attach a weapon model to.
 - [x] View model (first-person weapon model) rendering in the main engine window — own narrow-FOV projection pass + depth clear so it never clips into world geometry (pose/offset is a fixed approximation, not attachment-point accurate — see animation TODO below)
 
 ### Physics & Movement
 - [x] Gravity + jump + ground detection (probe-based, snaps back on floor/ceiling contact instead of clipping through) — verified against real de_dust2 geometry with logged position/velocity
-- [ ] Ducking, ground friction/acceleration curves, air control (movement is instant-velocity, not accelerated — no strafe-jumping, no "Source feel" yet)
-- [ ] Full hull-based collision for other hulls (crouching hull, large hull) — only the standard player hull is implemented
+- [x] Ducking, ground friction/acceleration curves, air control — replaced the old instant-velocity movement with persistent velocity + Quake/Source-style ground acceleration and friction (speed ramps up to and decelerates from a real max speed instead of snapping), plus a separate, much weaker air-acceleration constant for limited air control. Ctrl holds duck (switches to the crouch collision hull, halves move speed, lowers the eye height), and only stands back up once there's headroom (hull 1 isn't solid at the current position). Verified interactively (via simulated key input + a debug telemetry log): holding W ramps speed from 0 up to exactly the 250 u/s walk cap then decays back to 0 on release from ground friction; the same test while holding Ctrl caps at exactly 125 u/s (half speed, as configured); no strafe-jump speed-bunnying yet, just the acceleration/friction/air-control model itself.
+- [x] Full hull-based collision for other hulls (crouching hull, large hull) — `BspMap` now parses and exposes all 4 of the map's precompiled collision hulls (`pointInSolidHull(point, hull)`, hull 0=point/1=standing/2="large"/3=crouch) instead of hardcoding hull 1 everywhere; movement/ducking above actually switches between hull 1 and hull 3 live. Verified by scanning a vertical line through a real doorway on de_dust2: hull 1 (standing) reports solid in several z-ranges where hull 3 (crouch) reports clear — real, distinct collision geometry per hull, not just an alias. Hull 2 (large) parses and is queryable but nothing in gameplay uses it yet, since the original engine only used it for bigger monsters this project has no equivalent of.
 - [x] Line trace for hitscan (`BspMap::traceLine`) — a stepped-sampling trace, not a proper swept hull trace, so it's slightly less precise than the real engine's; fine for now, worth revisiting
-- [ ] Entity physics (moving platforms, doors, breakables)
+- [x] Entity physics (moving platforms, doors, breakables) — `brush_entities.h/.cpp` simulates `func_door` (opens on player touch along its compiled `angle`/`lip` movedir, waits, auto-closes, reverses if touched again while closing), `func_plat` (rides down when the player steps on top, waits at the bottom, returns), and `func_breakable` (tracks `health`, destroyed by bullet damage). Required extending `BspMap` beyond model-0-only collision: every submodel now keeps its own per-hull clip tree (`BspModelBounds::headNode`, `pointInSolidModel`) and a `faces() -> owning submodel` index (`faceModelIndices`), so a moved brush collides and renders where it actually is (`point - offset` against its own rest-position tree) instead of only at its compiled position. Player movement (X/Y/Z resolution, ground probe, duck-stand check) now also tests `BrushEntitySystem::pointInSolid`, standing on a moving platform carries the player along via a per-frame offset delta, and the bullet-hit raymarch damages/destroys breakables. Rendering excludes each live brush entity's faces from the static world mesh and redraws them translated by their current offset through the legacy fixed-function path (no lightmap on these faces, a known simplification). Verified: builds clean, and by construction a closed door's brush sits exactly on its compiled geometry (identical collision to before) until touched. No `func_train`/`path_corner`, rotating doors, or buttons/triggers yet — only the three entity classes actually named in this TODO.
 
 ### Gameplay Systems
-- [x] Entity system (`entities.h/.cpp`): all spawn points (CT/T-tagged) instead of just the first found, real bomb-target/buy-zone regions from BSP submodel bounds, live "BOMBSITE"/"BUY ZONE" HUD indicators — verified against de_dust2's real entity counts (40 spawns, 2 bomb targets, 2 buy zones). Other entity classes (func_door, func_button, breakables, triggers, lights) are still just static unparsed geometry/data.
+- [x] Entity system (`entities.h/.cpp`): all spawn points (CT/T-tagged) instead of just the first found, real bomb-target/buy-zone regions from BSP submodel bounds, live "BOMBSITE"/"BUY ZONE" HUD indicators — verified against de_dust2's real entity counts (40 spawns, 2 bomb targets, 2 buy zones). `func_door`/`func_plat`/`func_breakable` now simulate (see `brush_entities.h/.cpp` and the Physics & Movement entry above); `func_button`, triggers, and lights are still just static unparsed geometry/data.
 - [x] Basic hitscan firing: left click, 30-round magazine, R to reload, impact marker at the hit point — no damage/recoil/spread/switching yet, and only one weapon (AK47) is wired in at all
-- [ ] Player health/armor/death/respawn
-- [ ] Round system: buy time, round win/loss conditions, economy
-- [ ] Bomb defusal mode logic (plant/defuse, `de_` maps)
+- [x] Player health/death/respawn (`game_state.h/.cpp`): fall damage + a debug damage key, death freezes movement/shooting, auto-respawn at a random spawn point. No armor yet.
+- [x] Round system (partial): Live/Intermission timer loop, round ends on timeout or death, HUD banner + auto-respawn into the next round. No real win conditions (needs opposing entities/AI), no buy-time phase, no economy loop yet — see the in-round buy menu item below.
+- [x] Bomb defusal logic (`de_` maps): plant (T, hold E in a real func_bomb_target zone, 3s) and defuse (CT, hold E within 80 units of the bomb, 5s), 35s fuse, real win/loss round-end banners. Single-player only — no bots to plant/defuse against, and the bomb carries no visible world model yet.
 - [ ] Hostage rescue mode logic (`cs_` maps)
-- [ ] Team system (T/CT), team-based spawning
-- [ ] HUD (crosshair + ammo counter exist; health, money, timer, radar don't)
-- [ ] In-round buy menu (distinct from the main-menu Store — this is the classic F-key weapon purchase menu during the buy phase)
-- [ ] Scoreboard
+- [x] Team assignment (`PlayerState.team`) drives team-based spawn selection for both initial spawn and respawn. No team-select screen, no auto-balance, no other players — 'N' is a debug key to switch team for testing.
+- [x] HUD: crosshair, ammo, weapon name, health, round timer, money, team, zone/plant/defuse/bomb indicators, damage flash, and a real per-map radar (loads `cstrike/overviews/<map>.bmp`, player dot from our own BSP world bounds — not the overview file's own undocumented zoom/origin metadata)
+- [x] In-round buy menu (`weapons.h`): B key, gated to standing in a real func_buyzone + round live, weapon catalog with prices, deducts money and swaps the equipped weapon/ammo. Money system: starts at 800, flat per-round reward (no real win/loss economy tied to it yet). Only affects the primary weapon slot — no pistol/grenade/armor purchases, no per-team price differences yet.
+- [x] Scoreboard (hold Tab): real CT/T round-win tally, player's own team/money/health/round number. No player roster or kill count — single-player only, nothing else to list.
 
 ### Main Menu / Meta-game
 - [x] Top nav shell, Store, Inventory, Case-Opening with a fictive-currency economy (`csmenu`)
@@ -166,6 +168,155 @@ touching any of the asset loaders.
 - [ ] Save/load or at least map transition support
 - [ ] Cross-platform packaging (currently only built/tested on Linux)
 - [ ] Automated tests beyond the manual `mapshot`/`modelshot`/`wadtest` verification tools
+
+## Gap analysis: full competitive 5v5 tactical-FPS design vs. this engine
+
+A full game design spec (competitive 5v5 tactical FPS with its own identity —
+own maps/weapons/sounds/UI/progression, not CS assets) was compared against
+everything above. Most of it is genuinely new scope, not just a rewording of
+existing TODO items, so it's broken out here by system rather than merged in.
+Nothing in this section is started; a few rows note where a *very* partial,
+single-player-only foundation already exists elsewhere in this README.
+
+### Game modes
+- [ ] Competitive (ranked 5v5, round-based, side swap, overtime)
+- [ ] Casual (relaxed ruleset)
+- [ ] Deathmatch (free-for-all, respawn-on-death)
+- [ ] Team Deathmatch
+- [ ] Wingman (2v2, small maps)
+- [ ] Arms Race / gun-progression mode
+- [ ] Training/practice mode (aim/recoil/grenade drills, infinite money/ammo, target dummies)
+- [ ] Custom lobbies with user-defined rulesets
+- [ ] A mode/gametype selector at all — today `csmenu`'s PLAY only picks a map and always launches the same single-player round loop
+
+### Weapon system depth
+- [ ] Data-driven weapon definitions (external data, not hardcoded values) covering: price, damage, fire rate, magazine/reserve ammo, reload time, move-speed penalty, accuracy/spread curves (stand/crouch/move/jump), recoil pattern + recovery, armor penetration, damage falloff by range, headshot multiplier, draw/holster time
+- [ ] Named per-body-part hitboxes (head, chest, stomach, arms, legs) with independent damage multipliers — currently hitscan does undifferentiated flat damage to one PlayerState, no hitbox geometry at all
+- [ ] Learnable, non-random-feeling recoil patterns (deterministic vertical+horizontal pattern + bounded randomness + recovery-over-time), first-shot accuracy, moving/jumping/crouching accuracy modifiers
+- [ ] Armor/helmet damage reduction model
+- [ ] Bullet penetration through thin materials ("wallbang")
+- [ ] Full weapon roster across categories (pistols/SMGs/shotguns/rifles/snipers/heavy/melee) — only one rifle (AK47) is wired into gameplay today, even though all 87 view/world/pickup models already load
+- [ ] Server-side hit validation (moot until there's a client/server split at all — see Networking)
+
+### Grenades & thrown utility
+- [ ] Actual throwable/thrown-projectile grenades (arc trajectory, bounce, fuse) — today's "grenades" are just visual particle effects (explosion/smoke sprites) triggered directly by game logic, not physical thrown objects
+- [ ] HE grenade (explosive damage falloff by distance)
+- [ ] Smoke grenade (dynamic volume that blocks vision, expands/dissipates over time, interacts with geometry/lighting)
+- [ ] Flashbang (blind/deafen effect scaled by distance, view angle, and line-of-sight/cover)
+- [ ] Incendiary/molotov (timed area-denial fire zone with damage-over-time)
+
+### Physics & world interaction
+- [x] Interactive doors, moving platforms (`func_door`, `func_plat` — see the Physics & Movement TODO above); `func_button`/triggers still don't exist
+- [x] Breakable/destructible props (`func_breakable` — health from the map, destroyed by bullet damage; see the Physics & Movement TODO above)
+- [ ] Thrown/dropped physical objects (grenades before they're picked up as projectiles, a dropped bomb model, dropped weapons) — physics objects in general, beyond the player's own hull collision
+
+### Audio
+- [ ] (Everything already listed above under Audio, plus:) material-based footstep sounds (concrete/metal/wood/dirt/grass/stone/water), scaled by movement speed/crouch/distance
+- [ ] Spatial/3D positional audio as a hard requirement for competitive info-gathering (footsteps, reloads, defuse ticks), not just ambience
+- [ ] Voice chat: team/party/lobby channels, push-to-talk vs. open mic, per-player mute, muted-after-death-in-some-modes rule
+
+### Bots & AI
+- [ ] Any bot/AI opponent at all — the engine is single-player-vs-nothing today; every round system (plant/defuse/elimination) has no opposing side to actually contest it
+- [ ] Bot difficulty tiers (Beginner → Expert)
+- [ ] Bot perception (simulated hearing/sight, reaction time — not omniscient aim/wallhacking)
+- [ ] Bot navigation (a navmesh or waypoint graph — no such data exists for any map yet)
+- [ ] Bot tactical behavior: buy decisions, site attack/defense, rotations, plant/defuse, utility usage, team coordination/callouts between bots
+
+### Matchmaking, ranking & social
+- [ ] Any matchmaking at all (mode/region/skill-based queue, party-size handling, ping-aware server selection)
+- [ ] Skill rating / rank tiers + rank-up/down flow (names/structure to be designed fresh, not copied)
+- [ ] Leaderboards (global/region/country/friends; by rating, wins, kills, headshots, matches)
+- [ ] Friends list (add/remove/online-status/invite/join lobby/block/report)
+- [ ] Lobby/party system (pre-match lobby with ready-check, map/mode selection, invite/kick/promote-leader) — distinct from and prerequisite to matchmaking
+- [ ] Player profile (level, rank, W/L, K/D, HS%, favorite weapons/maps, playtime, recent matches)
+- [ ] Match history persistence (date, map, mode, result, per-match stats) — currently nothing about a match outcome is saved anywhere
+- [ ] Post-match results screen (winner, personal/team stats, rewards, rank delta) beyond the current bare round-win scoreboard tally
+
+### Server architecture & competitive integrity
+- [ ] Client/server split of any kind — the engine is a single process with no network layer today, so every item below is currently a hard blocker, not a refinement
+- [ ] Dedicated, authoritative server (server owns position/hit/damage/round/economy/objective state; the client only sends inputs)
+- [ ] Configurable tick-rate / server simulation frequency
+- [ ] Client-side prediction + server reconciliation, interpolation/extrapolation for other players
+- [ ] Lag compensation (ping/jitter/packet-loss-aware hit registration)
+- [ ] Anti-cheat: server-side plausibility checks (impossible movement/speed/fire-rate/position), detection heuristics for aimbot/triggerbot/wallhack/speedhack/no-recoil/no-spread/automation, file-integrity checks, suspicious-network-pattern flagging, and an escalation path (monitor → remove from match → ban → flag for review)
+- [ ] Server-side input validation in general (reject impossible client-claimed state before it affects the match)
+
+### Spectator & replay
+- [ ] Spectator mode (follow a player, free camera, first/third person toggle, radar/killfeed/round-info overlay, team-overview mode)
+- [ ] Demo/replay recording (positions, shots, hits, kills, grenades, objective actions, round state) and a player (play/pause/FF/rewind, jump to round, follow a player, free camera)
+- [ ] A dedicated broadcast/observer mode for tournaments
+
+### HUD, UI & settings
+- [ ] Killfeed (attacker → victim, weapon icon, headshot/wallbang/assist/team-kill indicators)
+- [ ] Quick team-comms / radio commands (no-mic-required "enemy spotted"/"going A"/"rotate"/etc.)
+- [ ] Full main-menu shell beyond Play/Watch/Inventory/Store: Loadout, Profile, Match History, Rank, Leaderboard, Settings, Workshop, Community
+- [ ] A real Settings menu: video (resolution/fullscreen/vsync/fps cap/texture-shadow-effects-AA-AO/particle quality), audio (master/music/effects/voice/UI volume), controls (full rebinding, not just movement defaults), mouse (sensitivity, ADS sensitivity, raw input, acceleration), crosshair customization (color/size/thickness/gap/outline/dot/dynamic vs. static)
+- [ ] Controller input support (currently keyboard/mouse only)
+- [ ] HUD configurability (currently a fixed layout)
+- [ ] Minimap info gated by actual game knowledge (only show what a team legitimately knows) — today's single-player radar just shows the map + own dot, there's no "known enemy info" concept to gate yet
+
+### Progression, cosmetics & content pipeline
+- [ ] Loadout screen (equip a specific owned skin per weapon per team) — listed above too; repeated here because it's also the entry point for the wider cosmetic system below
+- [ ] Skin system with rarity/quality/pattern/wear/float-style metadata that never affects weapon function (today's `csmenu` inventory economy is a reasonable skeleton for this but has no wear/pattern/float model)
+- [ ] Persisting inventory/currency/profile to disk (currently resets every launch)
+- [ ] Trade-up-style contracts, StatTrak-equivalent counters, stickers, sprays, music kits, agent/character cosmetics
+- [ ] Workshop/custom-content support (community maps/skins/sounds/sprays/UI/modes), sandboxed for safety
+- [ ] Store front for cosmetics-only purchases (no pay-to-win) — real-money payment rails specifically are already flagged above as needing a legal/compliance pass before any engineering work, independent of the cosmetic system itself
+
+### Moderation & trust
+- [ ] Player reporting (cheating/griefing/toxicity/abusive voice/team-killing/exploiting)
+- [ ] Admin/moderation tooling (player/match search, report queue, bans, mutes, chat logs, replay access, server logs) with a mandatory audit trail
+
+### Economy depth
+- [ ] Loss-bonus streak, plant/defuse/kill economy bonuses beyond the current flat per-round reward
+- [ ] The full buy-decision spectrum as a real strategic choice (full buy/force buy/eco/half-buy/save) — today there's one weapon slot and no team-wide economy signal to react to
+
+## Planned future asset source: CS2/CS:GO-style weapon models
+
+Once the MDL pipeline and gameplay are further along, the plan is to switch
+the weapon view/world models from the original CS 1.5 (GoldSrc) assets to a
+higher-fidelity CS:GO/CS2-style pack:
+[`puRe991/CS2GO-Weapons-Pack-RELEASE`](https://github.com/puRe991/CS2GO-Weapons-Pack-RELEASE).
+
+Not integrated yet — nothing has been pulled in. Notes for when we do:
+- The repo's default branch only holds a `README.md` and `LICENSE`; the actual
+  model/texture files are distributed as GitHub Release downloads, not
+  committed to the tree, so switching means fetching a release archive, not
+  just cloning the repo.
+- Check the model format before assuming our `mdl.cpp` parser can load them
+  as-is: a CS:GO/CS2-era pack may use a newer Source-engine model format
+  (SMD/VTF/newer MDL versions) rather than GoldSrc's Studio Model v10 — likely
+  needs its own loader path, not a drop-in replacement.
+- Licensed CC0 1.0 (public domain dedication) — no redistribution restriction,
+  but still credit the original authors as a courtesy: Stomatolog (model
+  extraction, world model editing for shotguns); x F R 3 N Z Y M 0 V x and
+  Volodya (world model rigging); CrazySlavModder (MIGI addons, inspect
+  animations, model/texture/particle editing).
+
+### Second candidate source: "CS2 MOD PACK" (GameBanana)
+
+[gamebanana.com/mods/529076](https://gamebanana.com/mods/529076) — a fuller
+CS2-style content pack (2,378 files, ~1GB unpacked ~1.9GB): weapon and player
+sounds, weapon/player models, materials (models/vgui/weapons/decals/HUD),
+overview images, fonts, and a handful of scripts. Plus a small companion
+`font_8a987.zip` (CS:GO-style UI fonts: `cslogo.ttf`, `cstrike.ttf`,
+`csd.ttf`) — that one *is* committed, at
+`external_assets/cs2_mod_pack/font_8a987.zip`.
+
+The main `cs2_mod_pack.zip` is **not** committed to this repo — it was
+downloaded and handed to the user directly instead. Reasons:
+- **License**: CC BY-NC-ND 4.0 (non-commercial, no derivatives, redistribution
+  on other sites requires the author's permission). The user has stated they
+  have that permission for this project, but it's still worth knowing the
+  terms before touching these assets further.
+- **Size**: ~1GB is over GitHub's 100MB hard per-file limit on a plain push.
+  Git LFS was set up as the fix, but this fork has GitHub LFS uploads
+  disabled (`can not upload new objects to public fork`) — not something
+  fixable from here. GitHub Releases (which allow large files without LFS)
+  were also considered, but no release-creation/asset-upload tool was
+  available in this session.
+- If LFS gets enabled for this fork later, or the file should go into a
+  GitHub Release instead, re-download from the URL above and add it then.
 
 ## Design notes
 
