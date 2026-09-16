@@ -10,10 +10,10 @@
 #include "nav.h"
 
 // A real AI opponent, not a stub — see the README's Bots & AI section for
-// the honest list of what this still doesn't cover (still no true
-// polygonal navmesh, just a coarse visibility graph; no real per-round buy
-// strategy beyond "spend on the best affordable gun"; no rotations or
-// explicit team callouts beyond a shared last-seen-position).
+// the honest list of what this still doesn't cover (no real per-round buy
+// strategy beyond "spend on the best affordable gun"; no utility usage,
+// since bots don't have grenades — none exist yet; no explicit team chat,
+// just the shared last-seen-position callout below).
 enum class BotState { Idle, Search, Chase, Attack };
 
 // One difficulty tier's tuning: how long a bot takes to react once it spots
@@ -58,6 +58,15 @@ struct Bot {
 
     int money = kStartingMoney;
     int weaponIndex = 16; // AK47 — the default before a bot's first buy
+
+    // Index into EntitySystem::bombTargets this bot currently cares about:
+    // for T, the site it's pushing to plant; for CT, the site it's
+    // defending. Round-robin assigned across bombTargets so bots spread
+    // out instead of stacking one site, and reassigned ("rotating") once
+    // the bomb is actually planted — see assignBombSites()/BotSystem::update()
+    // in bots.cpp. -1 if the map has no bomb sites at all.
+    int assignedSite = -1;
+    float actionProgress = 0.0f; // seconds spent continuously planting/defusing, own timer, separate from the player's
 
     bool moving = false; // drives idle-vs-run animation selection
     float animTime = 0.0f;
@@ -108,8 +117,15 @@ public:
     // gunfire too; a teammate who has the player in sight shares that
     // position with the rest of the team for a few seconds even after
     // losing sight of it themself.
+    //
+    // Also drives site tactics: a T bot standing in its assigned bomb site
+    // (and not busy fighting) plants it, a CT bot within defuse range of a
+    // planted bomb (ditto) defuses it — both using their own actionProgress
+    // timer, entirely separate from the player's own round.plantProgress/
+    // defuseProgress, so the two never double-count. CT bots reassign
+    // ("rotate") to whichever site the bomb actually got planted at.
     std::vector<BotFiredEvent> update(float dt, const BspMap& map, const BrushEntitySystem& brushEntities,
-                                       const EntitySystem& entities, PlayerState& player,
+                                       const EntitySystem& entities, PlayerState& player, RoundState& round,
                                        Vec3 playerEye, Vec3 playerFeet,
                                        const std::vector<Vec3>& externalSounds = {});
 

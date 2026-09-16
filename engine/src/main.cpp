@@ -804,7 +804,7 @@ int main(int argc, char** argv) {
         if (round.phase == RoundPhase::Live) {
             Vec3 playerFeet{camera.x, camera.y, camera.z};
             Vec3 playerEye{camera.x, camera.y, camera.z + (ducked ? kDuckEyeHeight : kEyeHeight)};
-            std::vector<BotFiredEvent> botFires = botSystem.update(dt, map, brushEntities, entities, player, playerEye, playerFeet, pendingPlayerSounds);
+            std::vector<BotFiredEvent> botFires = botSystem.update(dt, map, brushEntities, entities, player, round, playerEye, playerFeet, pendingPlayerSounds);
             pendingPlayerSounds.clear();
             for (const BotFiredEvent& fired : botFires) {
                 audio.play3D(sndShootByCategory[(int)WeaponCategory::Rifle],

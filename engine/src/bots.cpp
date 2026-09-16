@@ -16,11 +16,12 @@ constexpr float kBotEngageRange = 1400.0f;  // max distance a bot will actually 
 constexpr float kBotStopDistance = 200.0f;  // stop closing once this near — keep some space, not melee-rush
 constexpr float kWanderRadius = 400.0f;     // how far a random patrol point is picked, when there's no objective to head for
 constexpr float kWanderInterval = 4.0f;     // seconds between picking a new wander/patrol target on reaching/stalling
-constexpr float kObjectiveWanderRadius = 150.0f; // how far from a bomb-site center a patrol point lands
+constexpr float kDefendRadius = 300.0f;     // how far out a CT holds from its assigned site's center while defending
 constexpr float kSearchDuration = 6.0f;     // seconds a bot investigates a sound/callout before giving up
 constexpr float kCalloutFreshness = 5.0f;   // a teammate's last-seen player position is usable for this long
 constexpr float kRepathThreshold = 150.0f;  // goal moved this far from the last plan: recompute the path
 constexpr float kWaypointRadius = 48.0f;    // "close enough" to a path waypoint to advance to the next one
+constexpr float kZoneInset = 16.0f;         // keep planting/defending targets this far off a zone's own walls
 
 Vec3 randomPointNear(Vec3 center, float radius) {
     float angle = ((float)std::rand() / (float)RAND_MAX) * 6.2831853f;
@@ -30,6 +31,56 @@ Vec3 randomPointNear(Vec3 center, float radius) {
 
 Vec3 zoneCenter(const ZoneRegion& zone) {
     return Vec3{(zone.mins.x + zone.maxs.x) * 0.5f, (zone.mins.y + zone.maxs.y) * 0.5f, (zone.mins.z + zone.maxs.z) * 0.5f};
+}
+
+// A random point actually inside `zone`'s bounds (inset a little from its
+// own walls), for a T bot to walk to and hold while planting — unlike a
+// random point *near* the center, this reliably lands inside the zone so
+// pointInZone() (and therefore the plant check) stays true once it arrives.
+Vec3 pointInsideZone(const ZoneRegion& zone) {
+    auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+    auto rand01 = []() { return (float)std::rand() / (float)RAND_MAX; };
+    float minX = zone.mins.x, maxX = zone.maxs.x;
+    float minY = zone.mins.y, maxY = zone.maxs.y;
+    if (maxX - minX > kZoneInset * 2.0f) { minX += kZoneInset; maxX -= kZoneInset; }
+    if (maxY - minY > kZoneInset * 2.0f) { minY += kZoneInset; maxY -= kZoneInset; }
+    return Vec3{lerp(minX, maxX, rand01()), lerp(minY, maxY, rand01()), zone.mins.z};
+}
+
+// A point roughly `radius` out from `center` (a ring, not a filled disk —
+// biased toward the outer edge) for a CT bot to hold while watching a site
+// from a bit of a distance, rather than standing in the middle of it.
+Vec3 defendOrbitPoint(Vec3 center, float radius) {
+    float angle = ((float)std::rand() / (float)RAND_MAX) * 6.2831853f;
+    float dist = radius * (0.7f + 0.3f * ((float)std::rand() / (float)RAND_MAX));
+    return Vec3{center.x + std::cos(angle) * dist, center.y + std::sin(angle) * dist, center.z};
+}
+
+// Index into `zones` whose center is nearest `pos` — used to have CT bots
+// rotate to whichever site the bomb actually got planted at.
+int nearestZoneIndex(Vec3 pos, const std::vector<ZoneRegion>& zones) {
+    int best = -1;
+    float bestDist = 1e30f;
+    for (size_t i = 0; i < zones.size(); ++i) {
+        Vec3 c = zoneCenter(zones[i]);
+        float dx = c.x - pos.x, dy = c.y - pos.y;
+        float d = dx * dx + dy * dy;
+        if (d < bestDist) { bestDist = d; best = (int)i; }
+    }
+    return best;
+}
+
+// Spreads bots round-robin across the map's bomb sites (so T bots split up
+// to push multiple sites, and CT bots don't all stack the same one) instead
+// of every bot independently picking at random each time it wanders.
+void assignBombSites(std::vector<Bot>& bots, const EntitySystem& entities) {
+    if (entities.bombTargets.empty()) {
+        for (Bot& b : bots) b.assignedSite = -1;
+        return;
+    }
+    int n = (int)entities.bombTargets.size();
+    int i = 0;
+    for (Bot& b : bots) { b.assignedSite = i % n; ++i; }
 }
 
 // Resolves one bot's movement toward `target` this frame against the same
@@ -165,6 +216,7 @@ void BotSystem::spawn(int count, Team team, const EntitySystem& entities, BotDif
         buyWeapon(b);
         bots.push_back(b);
     }
+    assignBombSites(bots, entities);
 }
 
 void BotSystem::respawnAll(const EntitySystem& entities) {
@@ -186,7 +238,9 @@ void BotSystem::respawnAll(const EntitySystem& entities) {
         b.pathIndex = 0;
         b.money = std::min(kMaxMoney, b.money + kRoundMoneyReward);
         buyWeapon(b);
+        b.actionProgress = 0.0f;
     }
+    assignBombSites(bots, entities);
 }
 
 int BotSystem::aliveCount() const {
@@ -217,7 +271,7 @@ void BotSystem::buildNav(const BspMap& map, const EntitySystem& entities, Vec3 m
 }
 
 std::vector<BotFiredEvent> BotSystem::update(float dt, const BspMap& map, const BrushEntitySystem& brushEntities,
-                                              const EntitySystem& entities, PlayerState& player,
+                                              const EntitySystem& entities, PlayerState& player, RoundState& round,
                                               Vec3 playerEye, Vec3 playerFeet,
                                               const std::vector<Vec3>& externalSounds) {
     std::vector<BotFiredEvent> events;
@@ -302,27 +356,77 @@ std::vector<BotFiredEvent> BotSystem::update(float dt, const BspMap& map, const 
                 break;
             }
             case BotState::Idle: {
-                bot.wanderTimer -= dt;
-                float dx = bot.wanderTarget.x - bot.origin.x, dy = bot.wanderTarget.y - bot.origin.y;
-                bool reached = (dx * dx + dy * dy) < (32.0f * 32.0f);
-                if (bot.wanderTimer <= 0.0f || reached) {
-                    // Gravitate toward a bomb site instead of wandering
-                    // purely at random when one exists — a coarse stand-in
-                    // for real site-attack/defense positioning (both teams
-                    // do this the same way; there's no attacker/defender
-                    // role split yet, see the README).
-                    if (!entities.bombTargets.empty()) {
-                        const ZoneRegion& zone = entities.bombTargets[std::rand() % entities.bombTargets.size()];
-                        bot.wanderTarget = randomPointNear(zoneCenter(zone), kObjectiveWanderRadius);
-                    } else {
-                        bot.wanderTarget = randomPointNear(bot.origin, kWanderRadius);
-                    }
+                // Role split: T pushes into its assigned site to plant (or,
+                // once the bomb is down, holds near wherever it landed); CT
+                // holds a perimeter around its assigned site instead of
+                // standing in the middle of it, and rotates — reassigns
+                // assignedSite — to the actual planted site once there is
+                // one, then closes in to defuse range.
+                bool hasSite = bot.assignedSite >= 0 && (size_t)bot.assignedSite < entities.bombTargets.size();
+                if (bot.team == Team::CT && round.bombPlanted) {
+                    int plantedSite = nearestZoneIndex(round.bombPosition, entities.bombTargets);
+                    if (plantedSite >= 0) bot.assignedSite = plantedSite;
+                    bot.wanderTarget = round.bombPosition; // rush in to defuse range
                     bot.wanderTimer = kWanderInterval;
+                } else if (bot.team == Team::T && round.bombPlanted) {
+                    bot.wanderTarget = defendOrbitPoint(round.bombPosition, kDefendRadius); // hold the plant against a retake
+                    bot.wanderTimer = kWanderInterval;
+                } else {
+                    bot.wanderTimer -= dt;
+                    float dx = bot.wanderTarget.x - bot.origin.x, dy = bot.wanderTarget.y - bot.origin.y;
+                    bool reached = (dx * dx + dy * dy) < (32.0f * 32.0f);
+                    if (bot.wanderTimer <= 0.0f || reached) {
+                        if (hasSite) {
+                            const ZoneRegion& zone = entities.bombTargets[bot.assignedSite];
+                            bot.wanderTarget = bot.team == Team::T ? pointInsideZone(zone)
+                                                                    : defendOrbitPoint(zoneCenter(zone), kDefendRadius);
+                        } else {
+                            bot.wanderTarget = randomPointNear(bot.origin, kWanderRadius);
+                        }
+                        bot.wanderTimer = kWanderInterval;
+                    }
                 }
                 Vec3 target = nextPathTarget(bot, nav_, bot.wanderTarget);
                 stepBotMovement(bot, target, dt, map, brushEntities);
                 break;
             }
+        }
+
+        // Bomb plant/defuse: its own progress timer, entirely separate from
+        // the player's own round.plantProgress/defuseProgress, so a bot and
+        // the player acting at the same time never double-count. Only
+        // while not actively fighting — a bot under fire defends itself
+        // instead of standing still trying to plant/defuse through it.
+        bool busy = bot.state == BotState::Attack;
+        if (bot.team == Team::T && !round.bombPlanted && !busy) {
+            bool inSite = false;
+            for (const ZoneRegion& z : entities.bombTargets) if (pointInZone(z, bot.origin)) { inSite = true; break; }
+            if (inSite) {
+                bot.actionProgress += dt;
+                if (bot.actionProgress >= kPlantDuration) {
+                    round.bombPlanted = true;
+                    round.bombTimer = kBombTimerDuration;
+                    round.bombPosition = bot.origin;
+                    bot.actionProgress = 0.0f;
+                }
+            } else {
+                bot.actionProgress = 0.0f;
+            }
+        } else if (bot.team == Team::CT && round.bombPlanted && !busy) {
+            float ddx = bot.origin.x - round.bombPosition.x, ddy = bot.origin.y - round.bombPosition.y,
+                  ddz = bot.origin.z - round.bombPosition.z;
+            float bombDist = std::sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
+            if (bombDist <= kDefuseRadius) {
+                bot.actionProgress += dt;
+                if (bot.actionProgress >= kDefuseDuration) {
+                    endRound(round, player, "BOMB_DEFUSED");
+                    bot.actionProgress = 0.0f;
+                }
+            } else {
+                bot.actionProgress = 0.0f;
+            }
+        } else {
+            bot.actionProgress = 0.0f;
         }
     }
 

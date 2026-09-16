@@ -4,17 +4,20 @@
 
 #include "assets/bsp.h"
 
-// A coarse stand-in for a real navmesh: a visibility graph over a handful
-// of "seed" points (spawns, bomb targets, buy zones — supplied by the
-// caller) plus a floor-probed grid sample across the map's bounds, with an
-// edge between any two nodes that have an unobstructed line of sight
-// between them. Not polygonal, not aware of hull width beyond "can a bullet
-// see between these two floor points" (so a path can still graze geometry
-// a real navmesh would route further from) — but real routing around walls
-// instead of the straight-line steering bots used to do, and enough to
-// unstick a bot from a corner a direct line would drive it into.
+// A real polygon navmesh's nodes, built from the map's own floor-facing BSP
+// faces (kept as-is, not re-triangulated/merged) and connected by genuine
+// shared-edge adjacency, not a guessed sightline — plus a supplementary
+// layer for gameplay points that don't land exactly on a floor polygon
+// (spawns, bomb targets, buy zones) and a floor-probed grid sample for maps
+// where too few usable floor faces were found, both stitched in via
+// line-of-sight edges. Still not hull-width-aware (a path can graze
+// geometry a clearance-aware navmesh would route further from), has no
+// ledge/jump links, and caps total node count for build-time safety — see
+// kMaxNodes in nav.cpp — but the bulk of the graph on a normal map is real
+// walkable geometry connected by real adjacency, not a heuristic.
 struct NavNode {
     Vec3 pos; // a floor-level (feet) position, same convention as Bot::origin
+    bool fromPolygon = false; // true if this node came from a real BSP floor face, not a seed/grid sample
 };
 
 class NavGraph {
