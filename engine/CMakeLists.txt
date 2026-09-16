@@ -38,6 +38,8 @@ add_executable(mapshot
     src/tools/mapshot.cpp
     src/assets/bsp.cpp
     src/assets/wad.cpp
+    src/assets/mdl.cpp
+    src/render/render.cpp
 )
 target_include_directories(mapshot PRIVATE ${SDL2_INCLUDE_DIRS} src)
 target_link_libraries(mapshot PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
@@ -46,6 +48,9 @@ target_link_libraries(mapshot PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
 add_executable(modelshot
     src/tools/modelshot.cpp
     src/assets/mdl.cpp
+    src/assets/bsp.cpp
+    src/assets/wad.cpp
+    src/render/render.cpp
 )
 target_include_directories(modelshot PRIVATE ${SDL2_INCLUDE_DIRS} src)
 target_link_libraries(modelshot PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
@@ -71,6 +76,9 @@ add_executable(csmenu
     src/ui/ui.cpp
     src/inventory.cpp
     src/assets/mdl.cpp
+    src/assets/bsp.cpp
+    src/assets/wad.cpp
+    src/render/render.cpp
 )
 target_include_directories(csmenu PRIVATE ${SDL2_INCLUDE_DIRS} src)
 target_link_libraries(csmenu PRIVATE ${SDL2_LIBRARIES} OpenGL::GL)
@@ -86,7 +94,7 @@ function(add_unit_test name)
 endfunction()
 
 add_unit_test(test_mat4)
-add_unit_test(test_camera src/camera.cpp)
+add_unit_test(test_camera src/camera.cpp src/cvar.cpp)
 add_unit_test(test_pak src/assets/pak.cpp)
 add_unit_test(test_wad src/assets/wad.cpp)
 add_unit_test(test_bsp src/assets/bsp.cpp src/assets/wad.cpp)

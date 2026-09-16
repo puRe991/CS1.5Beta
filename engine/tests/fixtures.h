@@ -9,6 +9,8 @@
 // here deliberately, since these are fixed file-format layouts, not
 // application logic to share.
 
+#include <unistd.h>
+
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -18,10 +20,13 @@
 
 namespace fixtures {
 
+// Unique per test process: the name carries the pid, so two test binaries (or
+// a parallel `ctest -j`) can't clobber each other's fixture files.
 inline std::string tempFilePath(const std::string& suffix) {
     static int counter = 0;
     auto dir = std::filesystem::temp_directory_path();
-    std::string name = "cs15_test_" + std::to_string(++counter) + suffix;
+    std::string name = "cs15_test_" + std::to_string((long)getpid()) +
+                       "_" + std::to_string(++counter) + suffix;
     return (dir / name).string();
 }
 
@@ -232,6 +237,29 @@ struct BspDModel {
     int32_t visLeafs;
     int32_t firstFace, numFaces;
 };
+struct BspDEdge {
+    uint16_t v[2];
+};
+struct BspDFace {
+    uint16_t planeNum;
+    int16_t side;
+    int32_t firstEdge;
+    int16_t numEdges;
+    int16_t texInfo;
+    uint8_t styles[4];
+    int32_t lightOfs;
+};
+struct BspTexInfo {
+    float vecs[2][4];
+    int32_t miptexIndex;
+    int32_t flags;
+};
+struct BspMipTexHeader {
+    char name[16];
+    uint32_t width;
+    uint32_t height;
+    uint32_t offsets[4];
+};
 #pragma pack(pop)
 
 // Builds a minimal but structurally valid BSP v30 file: an entity lump (raw
@@ -244,6 +272,15 @@ struct BspBuilder {
     std::vector<BspDPlane> planes;
     std::vector<BspDClipNode> clipNodes;
     std::vector<BspDModel> models;
+    std::vector<BspDFace> faces;
+    std::vector<BspTexInfo> texInfos;
+    std::vector<BspVec3> vertices;
+    std::vector<BspDEdge> edges;
+    std::vector<int32_t> surfEdges;
+    // Number of pixel-less textures to put in the texture lump. Faces are only
+    // kept by the loader if their texinfo resolves to a real texture, so a face
+    // test needs at least one.
+    int textureCount = 0;
 
     std::string build() const {
         std::vector<uint8_t> entityData(entityText.begin(), entityText.end());
@@ -253,12 +290,46 @@ struct BspBuilder {
         for (auto& c : clipNodes) append(clipData, c);
         std::vector<uint8_t> modelData;
         for (auto& m : models) append(modelData, m);
+        std::vector<uint8_t> faceData;
+        for (auto& f : faces) append(faceData, f);
+        std::vector<uint8_t> texInfoData;
+        for (auto& t : texInfos) append(texInfoData, t);
+        std::vector<uint8_t> vertexData;
+        for (auto& v : vertices) append(vertexData, v);
+        std::vector<uint8_t> edgeData;
+        for (auto& e : edges) append(edgeData, e);
+        std::vector<uint8_t> surfEdgeData;
+        for (auto& se : surfEdges) append(surfEdgeData, se);
+
+        // Texture lump: count, per-texture offsets, then headers with
+        // offsets[0] == 0 so the loader records the name but decodes no pixels.
+        std::vector<uint8_t> texData;
+        if (textureCount > 0) {
+            int32_t headerBytes = 4 + 4 * textureCount;
+            append(texData, (int32_t)textureCount);
+            for (int i = 0; i < textureCount; ++i) {
+                append(texData, (int32_t)(headerBytes + i * (int32_t)sizeof(BspMipTexHeader)));
+            }
+            for (int i = 0; i < textureCount; ++i) {
+                BspMipTexHeader mip{};
+                setName(mip.name, sizeof(mip.name), ("tex" + std::to_string(i)).c_str());
+                mip.width = 64;
+                mip.height = 64;
+                append(texData, mip);
+            }
+        }
 
         std::vector<std::pair<int, const std::vector<uint8_t>*>> lumpData = {
             {kLumpEntities, &entityData},
             {kLumpPlanes, &planeData},
             {kLumpClipNodes, &clipData},
             {kLumpModels, &modelData},
+            {kLumpFaces, &faceData},
+            {kLumpTexInfo, &texInfoData},
+            {kLumpTextures, &texData},
+            {kLumpVertexes, &vertexData},
+            {kLumpEdges, &edgeData},
+            {kLumpSurfEdges, &surfEdgeData},
         };
 
         BspHeaderRaw header{};
@@ -419,18 +490,23 @@ inline std::string buildSimpleMdl() {
     hdr.numSkinFamilies = 1;
     hdr.numBodyParts = 1;
 
+    // Real studio files keep every section 4-byte aligned (the loader reads the
+    // structs in place, so anything else would be a misaligned access); mirror
+    // that here instead of packing sections back-to-back.
+    auto align4 = [](int32_t v) { return (v + 3) & ~3; };
+
     int32_t offset = sizeof(MdlStudioHeader);
-    hdr.boneIndex = offset; offset += sizeof(MdlStudioBone) * hdr.numBones;
-    hdr.skinIndex = offset; offset += sizeof(int16_t) * hdr.numSkinRef;
-    hdr.textureIndex = offset; offset += sizeof(MdlStudioTexture) * hdr.numTextures;
-    hdr.bodyPartIndex = offset; offset += sizeof(MdlStudioBodyPart) * hdr.numBodyParts;
-    int32_t modelOffset = offset; offset += sizeof(MdlStudioModel);
-    int32_t vertInfoOffset = offset; offset += 3; // 3 bytes, vertBoneIndex
-    int32_t vertOffset = offset; offset += sizeof(verts);
-    int32_t meshOffset = offset; offset += sizeof(MdlStudioMesh);
-    int32_t triOffset = offset; offset += sizeof(cmds);
+    hdr.boneIndex = offset; offset = align4(offset + sizeof(MdlStudioBone) * hdr.numBones);
+    hdr.skinIndex = offset; offset = align4(offset + sizeof(int16_t) * hdr.numSkinRef);
+    hdr.textureIndex = offset; offset = align4(offset + sizeof(MdlStudioTexture) * hdr.numTextures);
+    hdr.bodyPartIndex = offset; offset = align4(offset + sizeof(MdlStudioBodyPart) * hdr.numBodyParts);
+    int32_t modelOffset = offset; offset = align4(offset + sizeof(MdlStudioModel));
+    int32_t vertInfoOffset = offset; offset = align4(offset + 3); // 3 bytes, vertBoneIndex
+    int32_t vertOffset = offset; offset = align4(offset + sizeof(verts));
+    int32_t meshOffset = offset; offset = align4(offset + sizeof(MdlStudioMesh));
+    int32_t triOffset = offset; offset = align4(offset + sizeof(cmds));
     hdr.textureDataIndex = offset;
-    int32_t texDataOffset = offset; offset += texPixels.size() + sizeof(palette);
+    int32_t texDataOffset = offset; offset = align4(offset + (int32_t)texPixels.size() + (int32_t)sizeof(palette));
 
     bodyPart.modelIndex = modelOffset;
     model.vertInfoIndex = vertInfoOffset;

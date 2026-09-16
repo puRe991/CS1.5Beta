@@ -19,8 +19,8 @@ Color rarityColor(Rarity r);
 struct SkinDef {
     std::string weapon;   // matches the w_/v_ model basename, e.g. "ak47"
     std::string skinName; // our own invented name, e.g. "Blue Streak"
-    Rarity rarity;
-    float tint[3]; // multiplied onto the base weapon texture's RGB
+    Rarity rarity = Rarity::MilSpec;
+    float tint[3] = {1.0f, 1.0f, 1.0f}; // multiplied onto the base weapon texture's RGB
 };
 
 struct CaseDef {

@@ -4,11 +4,10 @@
 #include <GL/gl.h>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <map>
 
 #include "../assets/bsp.h"
 #include "../mat4.h"
+#include "../render/render.h"
 
 namespace {
 
@@ -16,28 +15,6 @@ Vec3f parseOrigin(const std::string& s) {
     Vec3f v{0, 0, 0};
     std::sscanf(s.c_str(), "%f %f %f", &v.x, &v.y, &v.z);
     return v;
-}
-
-GLuint uploadTexture(const BspTexture& tex) {
-    GLuint id = 0;
-    glGenTextures(1, &id);
-    glBindTexture(GL_TEXTURE_2D, id);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
-    if (!tex.rgba.empty()) {
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex.width, tex.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex.rgba.data());
-    } else {
-        // Missing texture: 2x2 magenta/black checker so gaps are obvious, not invisible.
-        uint8_t pixels[16] = {
-            255,0,255,255,  0,0,0,255,
-            0,0,0,255,      255,0,255,255,
-        };
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    }
-    return id;
 }
 
 } // namespace
@@ -109,49 +86,14 @@ int main(int argc, char** argv) {
     glMatrixMode(GL_MODELVIEW);
     glLoadMatrixf(view.m);
 
-    std::vector<GLuint> texIds;
-    texIds.reserve(map.textures().size());
-    for (const auto& tex : map.textures()) texIds.push_back(uploadTexture(tex));
-
-    for (const auto& face : map.faces()) {
-        GLuint texId = (face.textureIndex >= 0 && (size_t)face.textureIndex < texIds.size()) ? texIds[face.textureIndex] : 0;
-        float texW = 64, texH = 64;
-        if (face.textureIndex >= 0 && (size_t)face.textureIndex < map.textures().size()) {
-            texW = (float)map.textures()[face.textureIndex].width;
-            texH = (float)map.textures()[face.textureIndex].height;
-        }
-        glBindTexture(GL_TEXTURE_2D, texId);
-
-        glBegin(GL_POLYGON);
-        for (size_t i = 0; i < face.vertices.size(); ++i) {
-            float u = face.texCoords[i * 2 + 0] / (texW > 0 ? texW : 1);
-            float v = face.texCoords[i * 2 + 1] / (texH > 0 ? texH : 1);
-            glTexCoord2f(u, v);
-            glVertex3f(face.vertices[i].x, face.vertices[i].y, face.vertices[i].z);
-        }
-        glEnd();
-    }
+    std::vector<GLuint> texIds = uploadTextures(map.textures());
+    drawBspFaces(map, texIds);
 
     SDL_GL_SwapWindow(window);
 
-    std::vector<uint8_t> pixels(W * H * 3);
-    glReadPixels(0, 0, W, H, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
-
-    // glReadPixels gives bottom-up rows; flip to top-down for a normal image file.
-    std::vector<uint8_t> flipped(W * H * 3);
-    for (int y = 0; y < H; ++y) {
-        std::memcpy(&flipped[y * W * 3], &pixels[(H - 1 - y) * W * 3], W * 3);
-    }
-
-    SDL_Surface* surf = SDL_CreateRGBSurfaceFrom(flipped.data(), W, H, 24, W * 3,
-        0x0000FF, 0x00FF00, 0xFF0000, 0);
-    if (!surf || SDL_SaveBMP(surf, outPath.c_str()) != 0) {
-        std::fprintf(stderr, "SDL_SaveBMP failed: %s\n", SDL_GetError());
-        return 1;
-    }
+    if (!saveScreenshotBMP(outPath, W, H)) return 1;
     std::printf("saved %s\n", outPath.c_str());
 
-    SDL_FreeSurface(surf);
     SDL_GL_DeleteContext(ctx);
     SDL_DestroyWindow(window);
     SDL_Quit();
