@@ -25,6 +25,8 @@
 #include "render/particles.h"
 #include "render/decals.h"
 #include "audio/audio.h"
+#include "bots.h"
+#include "hitboxes.h"
 
 namespace {
 const char* kWorldVertexShader = R"(#version 120
@@ -381,8 +383,20 @@ int main(int argc, char** argv) {
     AudioEngine audio;
     audio.init(); // no-op device if the platform/SDL build has no audio backend
     audio.setMasterVolume(snd_volume.AsFloat());
-    int sndShoot = audio.loadSound(wadDir + "/sound/weapons/ak47-1.wav");
-    int sndReload = audio.loadSound(wadDir + "/sound/weapons/ak47_clipout.wav");
+    // One representative fire sound per weapon category, indexed by
+    // WeaponCategory — a real per-weapon sound set would need one sample
+    // per gun, which isn't worth the asset lookup table before real game
+    // sound files are actually available to test against.
+    int sndShootByCategory[] = {
+        audio.loadSound(wadDir + "/sound/weapons/knife_slash1.wav"),  // Melee
+        audio.loadSound(wadDir + "/sound/weapons/usp1.wav"),          // Pistol
+        audio.loadSound(wadDir + "/sound/weapons/mp5-1.wav"),         // Smg
+        audio.loadSound(wadDir + "/sound/weapons/m3-1.wav"),          // Shotgun
+        audio.loadSound(wadDir + "/sound/weapons/ak47-1.wav"),        // Rifle
+        audio.loadSound(wadDir + "/sound/weapons/awp1.wav"),          // Sniper
+        audio.loadSound(wadDir + "/sound/weapons/m249-1.wav"),        // Heavy
+    };
+    int sndReload = audio.loadSound(wadDir + "/sound/weapons/clipout1.wav");
     int sndJump = audio.loadSound(wadDir + "/sound/player/pl_jump1.wav");
     std::vector<int> sndFootsteps = {
         audio.loadSound(wadDir + "/sound/player/pl_step1.wav"),
@@ -405,6 +419,30 @@ int main(int argc, char** argv) {
     // CT convention). 'N' switches teams at runtime for testing, since
     // there's no team-select screen or other players to balance against yet.
     PlayerState player;
+
+    // --- Bots: the opposing side, spawned once at startup. Fixed to the
+    // team opposite the player's *starting* team — switching teams at
+    // runtime with 'N' doesn't re-team the bots, since that debug key
+    // predates bots existing at all and isn't meant to model a real match.
+    // See bots.h for what this AI actually does and doesn't cover.
+    Team botTeam = player.team == Team::CT ? Team::T : Team::CT;
+    MdlModel botBodyModel;
+    std::vector<GLuint> botBodyTexIds;
+    bool hasBotBodyModel = false;
+    {
+        std::string path = wadDir + "/models/player/" + (botTeam == Team::CT ? "urban/urban.mdl" : "terror/terror.mdl");
+        hasBotBodyModel = botBodyModel.load(path);
+        if (hasBotBodyModel) {
+            botBodyTexIds.reserve(botBodyModel.textures().size());
+            for (const auto& tex : botBodyModel.textures()) botBodyTexIds.push_back(uploadTexture(tex));
+        }
+    }
+    int botIdleSeq = hasBotBodyModel ? botBodyModel.findSequence("idle1") : -1;
+    int botRunSeq = hasBotBodyModel ? botBodyModel.findSequence("run") : -1;
+    constexpr int kBotCount = 4;
+    BotSystem botSystem;
+    botSystem.spawn(kBotCount, botTeam, entities);
+    int sndBotHit = audio.loadSound(wadDir + "/sound/player/bhit_flesh-1.wav");
 
     Camera camera;
     {
@@ -481,9 +519,13 @@ int main(int argc, char** argv) {
     constexpr float kDuckEyeHeight = 32.0f;  // ditto, ducked (shorter hull -> lower eyes)
     bool ducked = false;
 
-    // --- Weapon test state ---
-    constexpr int kMagazineSize = 30;
-    int ammoInMag = kMagazineSize;
+    // --- Weapon state: current loadout, magazine + reserve ammo, and a
+    // fire-rate cooldown so each weapon's own rpm/full-auto flag actually
+    // gates the shoot key instead of every gun firing once per click. ---
+    int currentWeaponIndex = 16; // AK47 — matches the old hardcoded starting loadout
+    int ammoInMag = weaponByIndex(currentWeaponIndex).magazineSize;
+    int reserveAmmo = weaponByIndex(currentWeaponIndex).reserveAmmo;
+    float fireCooldown = 0.0f;
     bool mouseWasDown = false;
 
     // --- Damage flash (screen reddens briefly when hurt) ---
@@ -505,7 +547,6 @@ int main(int argc, char** argv) {
     // --- Buy menu ---
     bool buyMenuOpen = false;
     bool bWasDown = false;
-    std::string currentWeaponName = "AK47";
 
     while (running) {
         SDL_Event event;
@@ -549,12 +590,18 @@ int main(int argc, char** argv) {
                     running = false;
                 }
             } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r) {
-                ammoInMag = kMagazineSize;
-                if (viewSeqs.reload >= 0) {
-                    viewAnimState = ViewAnimState::Reload;
-                    viewAnimTime = 0.0f;
+                const WeaponDef& w = weaponByIndex(currentWeaponIndex);
+                int needed = w.magazineSize - ammoInMag;
+                int toLoad = std::min(needed, reserveAmmo);
+                if (toLoad > 0) {
+                    ammoInMag += toLoad;
+                    reserveAmmo -= toLoad;
+                    if (viewSeqs.reload >= 0) {
+                        viewAnimState = ViewAnimState::Reload;
+                        viewAnimTime = 0.0f;
+                    }
+                    audio.play2D(sndReload, 0.7f);
                 }
-                audio.play2D(sndReload, 0.7f);
             } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_v) {
                 thirdPerson = !thirdPerson;
             } else if (event.type == SDL_MOUSEMOTION && !buyMenuOpen) {
@@ -621,7 +668,7 @@ int main(int argc, char** argv) {
             if (!map.pointInSolidHull(standTest, 1) && !brushEntities.pointInSolid(map, standTest, 1)) ducked = false;
         }
         int hull = ducked ? 3 : 1;
-        float wishSpeed = kWalkSpeed * (ducked ? kCrouchSpeedScale : 1.0f);
+        float wishSpeed = kWalkSpeed * (ducked ? kCrouchSpeedScale : 1.0f) * weaponByIndex(currentWeaponIndex).moveSpeedScale;
 
         // Wish direction in world space, normalized so diagonal movement
         // isn't faster than a single direction.
@@ -742,6 +789,27 @@ int main(int argc, char** argv) {
         camera.y = candidate.y;
         camera.z = candidate.z;
 
+        // Bots: perceive, move, and shoot at the player (applying real
+        // damage) — see bots.h for exactly what this does and doesn't
+        // model. Skipped while the round isn't live so bots stand down
+        // during intermission, same as the player's own controls do.
+        if (round.phase == RoundPhase::Live) {
+            Vec3 playerFeet{camera.x, camera.y, camera.z};
+            Vec3 playerEye{camera.x, camera.y, camera.z + (ducked ? kDuckEyeHeight : kEyeHeight)};
+            std::vector<BotFiredEvent> botFires = botSystem.update(dt, map, brushEntities, entities, player, playerEye, playerFeet);
+            for (const BotFiredEvent& fired : botFires) {
+                audio.play3D(sndShootByCategory[(int)WeaponCategory::Rifle],
+                             Vec3f{(float)fired.position.x, (float)fired.position.y, (float)fired.position.z}, 0.9f, 2000.0f);
+                particles.spawn(fxMuzzleFlash, Vec3f{(float)fired.position.x, (float)fired.position.y, (float)fired.position.z}, 0.15f, 0.06f);
+            }
+            // Elimination win: every opposing bot dead and no bomb ticking
+            // (a planted bomb's own timer is still the real win condition,
+            // same rule the player-death check below it already follows).
+            if (!round.bombPlanted && botSystem.aliveCount() == 0) {
+                endRound(round, player, "ELIMINATED");
+            }
+        }
+
         Vec3 respawnOrigin;
         float respawnYaw = 0.0f;
         if (updateRound(round, player, entities, dt, respawnOrigin, respawnYaw)) {
@@ -751,8 +819,10 @@ int main(int argc, char** argv) {
             camera.yaw = respawnYaw;
             camera.pitch = 0.0f;
             velocityZ = 0.0f;
-            ammoInMag = kMagazineSize;
+            ammoInMag = weaponByIndex(currentWeaponIndex).magazineSize;
+            reserveAmmo = weaponByIndex(currentWeaponIndex).reserveAmmo;
             bombExplosionSpawned = false; // new round: allow the next detonation to spawn its effect
+            botSystem.respawnAll(entities);
         }
         if (round.endReason == "BOMB_EXPLODED" && !bombExplosionSpawned) {
             bombExplosionSpawned = true;
@@ -765,6 +835,7 @@ int main(int argc, char** argv) {
         lastHealth = player.health;
         if (damageFlashTimer > 0.0f) damageFlashTimer -= dt;
         if (muzzleFlashTimer > 0.0f) muzzleFlashTimer -= dt;
+        if (fireCooldown > 0.0f) fireCooldown -= dt;
         particles.update(dt);
         viewAnimTime += dt;
         bodyAnimTime += dt;
@@ -869,8 +940,17 @@ int main(int argc, char** argv) {
 
         // --- Shooting: left click fires a hitscan trace, leaves an impact mark ---
         bool mouseDown = SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON(SDL_BUTTON_LEFT);
-        if (mouseDown && !mouseWasDown && ammoInMag > 0 && player.alive && !buyMenuOpen && !Console::Get().IsOpen()) {
-            --ammoInMag;
+        const WeaponDef& equippedWeapon = weaponByIndex(currentWeaponIndex);
+        bool isMelee = equippedWeapon.magazineSize == 0;
+        bool hasAmmo = isMelee || ammoInMag > 0;
+        // Semi-auto weapons (and melee) need a fresh click each attack;
+        // full-auto weapons just need the button held and their cooldown
+        // elapsed — that's what actually makes rpm/fullAuto do anything,
+        // versus the old one-shot-per-click behavior every weapon had.
+        bool triggerPulled = equippedWeapon.fullAuto ? mouseDown : (mouseDown && !mouseWasDown);
+        if (triggerPulled && fireCooldown <= 0.0f && hasAmmo && player.alive && !buyMenuOpen && !Console::Get().IsOpen()) {
+            if (!isMelee) --ammoInMag;
+            fireCooldown = 60.0f / equippedWeapon.fireRateRpm;
             muzzleFlashTimer = kMuzzleFlashDuration;
             if (viewSeqs.shoot >= 0) {
                 viewAnimState = ViewAnimState::Shoot;
@@ -885,9 +965,9 @@ int main(int argc, char** argv) {
             particles.spawn(fxMuzzleFlash,
                              Vec3f{eye.x + forwardDir.x * 20.0f, eye.y + forwardDir.y * 20.0f, eye.z + forwardDir.z * 20.0f},
                              0.15f, 0.06f);
-            audio.play2D(sndShoot, 0.9f); // 2D: the shooter always hears their own gunfire at full volume
+            audio.play2D(sndShootByCategory[(int)equippedWeapon.category], 0.9f); // 2D: the shooter always hears their own gunfire at full volume
             Vec3 traceStart{eye.x, eye.y, eye.z};
-            constexpr float kRange = 4096.0f;
+            float kRange = isMelee ? kMeleeRange : 4096.0f;
             Vec3 traceEnd{eye.x + forwardDir.x * kRange, eye.y + forwardDir.y * kRange, eye.z + forwardDir.z * kRange};
             Vec3 hit;
             Vec3 hitNormal;
@@ -900,16 +980,17 @@ int main(int argc, char** argv) {
             // Breakables: a separate raymarch (against the moved/still-solid
             // brush entities, which the static traceLine above never sees)
             // stopping at whichever comes first, world geometry or a
-            // breakable — and dealing damage to the one it actually hit.
+            // breakable — and dealing damage to the one it actually hit,
+            // scaled by the equipped weapon's own damage stat.
             constexpr float kBreakableStep = 4.0f;
-            constexpr int kBreakableBulletDamage = 50;
-            for (float t = 0.0f; t < worldHitDist; t += kBreakableStep) {
+            float bestHitDist = worldHitDist;
+            for (float t = 0.0f; t < bestHitDist; t += kBreakableStep) {
                 Vec3 p{traceStart.x + forwardDir.x * t, traceStart.y + forwardDir.y * t,
                        traceStart.z + forwardDir.z * t};
                 if (brushEntities.pointInSolid(map, p, 0)) {
                     int destroyedBefore = 0;
                     for (const auto& e : brushEntities.entities) if (e.destroyed) ++destroyedBefore;
-                    brushEntities.damageAt(p, kBreakableBulletDamage);
+                    brushEntities.damageAt(p, equippedWeapon.damage);
                     int destroyedAfter = 0;
                     for (const auto& e : brushEntities.entities) if (e.destroyed) ++destroyedAfter;
                     if (destroyedAfter > destroyedBefore) {
@@ -918,7 +999,44 @@ int main(int argc, char** argv) {
                     hit = p;
                     hitNormal = Vec3{-forwardDir.x, -forwardDir.y, -forwardDir.z};
                     didHit = true;
+                    bestHitDist = t;
                     break;
+                }
+            }
+
+            // Bots: resolve to the actual per-body-part hitbox a bullet
+            // crosses (assets/mdl.h's poseHitboxes(), transformed into world
+            // space by the bot's own position/facing) rather than a flat
+            // hit/miss on the whole bot — this is what finally puts the
+            // hitbox system (see hitboxes.h) into a live damage path, since
+            // bots are the first opposing entity this engine has ever had.
+            if (hasBotBodyModel) {
+                for (size_t bi = 0; bi < botSystem.bots.size(); ++bi) {
+                    const Bot& bot = botSystem.bots[bi];
+                    if (!bot.alive) continue;
+                    int activeBotSeq = bot.moving && botRunSeq >= 0 ? botRunSeq : botIdleSeq;
+                    std::vector<WorldHitbox> localBoxes;
+                    if (activeBotSeq >= 0) {
+                        const MdlSequence& seq = botBodyModel.sequences()[activeBotSeq];
+                        float frame = std::fmod(bot.animTime * seq.fps, (float)seq.numFrames);
+                        localBoxes = botBodyModel.poseHitboxes(activeBotSeq, frame);
+                    } else {
+                        localBoxes = botBodyModel.poseHitboxes(-1, 0.0f);
+                    }
+                    std::vector<WorldHitbox> worldBoxes = transformHitboxesToWorld(localBoxes, bot.origin, bot.yaw);
+                    HitboxTraceResult r = traceHitboxes(worldBoxes, traceStart, Vec3{forwardDir.x, forwardDir.y, forwardDir.z}, bestHitDist);
+                    if (r.hit) {
+                        bestHitDist = r.distance;
+                        int dmg = (int)std::round(equippedWeapon.damage * r.damageMultiplier);
+                        botSystem.damage(bi, dmg);
+                        hit = Vec3{traceStart.x + forwardDir.x * r.distance, traceStart.y + forwardDir.y * r.distance,
+                                   traceStart.z + forwardDir.z * r.distance};
+                        hitNormal = Vec3{-forwardDir.x, -forwardDir.y, -forwardDir.z};
+                        didHit = true;
+                        audio.play3D(sndBotHit, Vec3f{(float)hit.x, (float)hit.y, (float)hit.z}, 0.8f, 1200.0f);
+                        decals.spawn(bloodDecals, Vec3f{(float)hit.x, (float)hit.y, (float)hit.z},
+                                     Vec3f{(float)hitNormal.x, (float)hitNormal.y, (float)hitNormal.z}, 10.0f);
+                    }
                 }
             }
 
@@ -1037,6 +1155,31 @@ int main(int argc, char** argv) {
             glLoadMatrixf(view.m); // restore: undo the translate/rotate for whatever draws next
         }
 
+        // Bots: always drawn in third person (there's no first-person view
+        // for them), same pose/translate/rotate approach as the player's
+        // own third-person body above.
+        if (hasBotBodyModel) {
+            for (const Bot& bot : botSystem.bots) {
+                if (!bot.alive) continue;
+                int activeBotSeq = bot.moving && botRunSeq >= 0 ? botRunSeq : botIdleSeq;
+                std::vector<MdlTriangle> botTriangles;
+                if (activeBotSeq >= 0) {
+                    const MdlSequence& seq = botBodyModel.sequences()[activeBotSeq];
+                    float frame = std::fmod(bot.animTime * seq.fps, (float)seq.numFrames);
+                    botTriangles = botBodyModel.pose(activeBotSeq, frame);
+                } else {
+                    botTriangles = botBodyModel.triangles();
+                }
+
+                glMatrixMode(GL_MODELVIEW);
+                glLoadMatrixf(view.m);
+                glTranslatef(bot.origin.x, bot.origin.y, bot.origin.z);
+                glRotatef(bot.yaw, 0.0f, 0.0f, 1.0f);
+                drawMdlTriangles(botTriangles, botBodyModel.textures(), botBodyTexIds);
+                glLoadMatrixf(view.m);
+            }
+        }
+
         if (hasViewModel && !thirdPerson) {
             // Classic FPS trick: separate (narrower) projection so the model
             // isn't fisheye-distorted at close range, and cleared depth so
@@ -1148,9 +1291,13 @@ int main(int argc, char** argv) {
         uiDrawRect(cx - 8, cy - 1, 16, 2, kColorWhite);
         uiDrawRect(cx - 1, cy - 8, 2, 16, kColorWhite);
         char ammoStr[32];
-        std::snprintf(ammoStr, sizeof(ammoStr), "%d / %d", ammoInMag, kMagazineSize);
+        if (equippedWeapon.magazineSize > 0) {
+            std::snprintf(ammoStr, sizeof(ammoStr), "%d / %d", ammoInMag, reserveAmmo);
+        } else {
+            std::snprintf(ammoStr, sizeof(ammoStr), "--");
+        }
         uiDrawText(kWidth - uiTextWidth(ammoStr, 2.5f) - 24, kHeight - 48, ammoStr, kColorWhite, 2.5f);
-        uiDrawText(kWidth - uiTextWidth(currentWeaponName, 1.4f) - 24, kHeight - 76, currentWeaponName, Color{0.7f, 0.7f, 0.7f, 1.0f}, 1.4f);
+        uiDrawText(kWidth - uiTextWidth(equippedWeapon.name, 1.4f) - 24, kHeight - 76, equippedWeapon.name, Color{0.7f, 0.7f, 0.7f, 1.0f}, 1.4f);
 
         // Health + round timer.
         char hpStr[32];
@@ -1170,6 +1317,10 @@ int main(int argc, char** argv) {
             else if (round.endReason == "TIME") { bigMsg = "CT WIN - TIME"; bigColor = Color{0.4f, 0.6f, 1.0f, 1.0f}; }
             else if (round.endReason == "BOMB_EXPLODED") { bigMsg = "T WIN - BOMB DETONATED"; bigColor = Color{1.0f, 0.8f, 0.3f, 1.0f}; }
             else if (round.endReason == "BOMB_DEFUSED") { bigMsg = "CT WIN - BOMB DEFUSED"; bigColor = Color{0.4f, 0.6f, 1.0f, 1.0f}; }
+            else if (round.endReason == "ELIMINATED") {
+                bigMsg = player.team == Team::CT ? "CT WIN - ELIMINATION" : "T WIN - ELIMINATION";
+                bigColor = player.team == Team::CT ? Color{0.4f, 0.6f, 1.0f, 1.0f} : Color{1.0f, 0.8f, 0.3f, 1.0f};
+            }
             float w = uiTextWidth(bigMsg, 3.0f);
             uiDrawText((kWidth - w) / 2.0f, kHeight / 2.0f - 60, bigMsg, bigColor, 3.0f);
 
@@ -1241,27 +1392,41 @@ int main(int argc, char** argv) {
             std::snprintf(moneyBig, sizeof(moneyBig), "MONEY: $%d", player.money);
             uiDrawText(24, 64, moneyBig, Color{0.4f, 1.0f, 0.4f, 1.0f}, 2.0f);
 
-            float by = 120;
+            // Laid out as one column per WeaponCategory (the catalog is
+            // already grouped in that order) rather than one long list,
+            // since the full roster no longer fits one screen-height column.
+            constexpr const char* kCategoryNames[] = {"MELEE", "PISTOLS", "SMGS", "SHOTGUNS", "RIFLES", "SNIPERS", "HEAVY"};
+            constexpr float kColumnWidth = 178.0f;
+            constexpr float kColumnTop = 150.0f;
+            float columnY[7] = {kColumnTop, kColumnTop, kColumnTop, kColumnTop, kColumnTop, kColumnTop, kColumnTop};
+            int lastCategory = -1;
             for (int i = 0; i < kWeaponCatalogCount; ++i) {
                 const WeaponDef& w = kWeaponCatalog[i];
+                int cat = (int)w.category;
+                float bx = 24 + cat * kColumnWidth;
+                if (cat != lastCategory) {
+                    uiDrawText(bx, 118, kCategoryNames[cat], Color{0.8f, 0.8f, 0.3f, 1.0f}, 1.3f);
+                    lastCategory = cat;
+                }
                 bool canAfford = player.money >= w.price;
                 Color bg = canAfford ? Color{0.15f, 0.16f, 0.2f, 1.0f} : Color{0.3f, 0.15f, 0.15f, 1.0f};
 
-                char label[64];
-                std::snprintf(label, sizeof(label), "%-10s $%d", w.name, w.price);
-                if (uiButton(24, by, 300, 36, label, bg) && canAfford) {
+                char label[48];
+                std::snprintf(label, sizeof(label), "%s $%d", w.name, w.price);
+                if (uiButton(bx, columnY[cat], kColumnWidth - 8, 32, label, bg) && canAfford) {
                     player.money -= w.price;
                     if (equipWeapon(wadDir + "/models/" + w.viewModel)) {
-                        currentWeaponName = w.name;
+                        currentWeaponIndex = i;
                         ammoInMag = w.magazineSize;
+                        reserveAmmo = w.reserveAmmo;
                     }
                     buyMenuOpen = false;
                     SDL_SetRelativeMouseMode(SDL_TRUE);
                 }
-                by += 44;
+                columnY[cat] += 38.0f;
             }
 
-            uiDrawText(24, by + 12, "ESC TO CLOSE", Color{0.6f, 0.6f, 0.6f, 1.0f}, 1.5f);
+            uiDrawText(24, kHeight - 40, "ESC TO CLOSE", Color{0.6f, 0.6f, 0.6f, 1.0f}, 1.5f);
         }
 
         // --- Scoreboard (hold Tab) ---

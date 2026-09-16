@@ -6,11 +6,11 @@
 #include "weapons.h"
 
 // First real gameplay loop: player health/death/respawn and a round timer.
-// Deliberately scoped for single-player testing (no bots/opponents yet):
-// damage currently comes from fall damage and a debug test key, and a
-// round "ends" on either the timer running out or the player dying — real
-// win conditions (bomb, elimination, hostages) need actual opposing
-// entities/AI, tracked separately in the README TODO.
+// A round ends on the timer running out, the player dying, a bomb
+// detonating/being defused, or now (see bots.h) every opposing bot being
+// eliminated ("ELIMINATED" below) — real elimination/bomb win conditions
+// needed actual opposing entities/AI to exist first, which bots.h now
+// provides; hostage rescue still doesn't (see the README TODO).
 
 constexpr int kMaxHealth = 100;
 constexpr float kRoundDuration = 115.0f;       // seconds, ~classic CS round length

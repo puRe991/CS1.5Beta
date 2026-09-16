@@ -57,6 +57,9 @@ engine/
     entities.{h,cpp}     # BSP entity lump -> spawns, bomb targets, buy zones
     menu_main.cpp        # CS:GO-inspired main menu (Play/Watch/Inventory/Store)
     inventory.{h,cpp}    # fictive-currency skin/case economy + case-opening RNG
+    weapons.h            # weapon catalog: price/model/ammo/damage/fire-rate/etc. per weapon
+    hitboxes.h           # per-body-part damage multipliers + ray-vs-hitbox trace
+    bots.{h,cpp}          # AI opponents: perception, movement, state machine, firing
     render/
       render.{h,cpp}      # shared GL drawing: texture upload, BSP/MDL draw, screenshots
     ui/
@@ -75,6 +78,7 @@ engine/
       mapshot.cpp        # standalone map screenshot tool
       modelshot.cpp      # standalone model screenshot tool
       mdlbatchtest.cpp   # batch-load a list of .mdl files, report pass/fail per file
+      hitboxtest.cpp     # load one .mdl, print its parsed hitboxes/body parts/world bounds
   tests/                 # unit tests (CTest), run headless — no SDL/GL needed
     test_framework.h     # tiny header-only test harness (no external dependency)
     fixtures.h           # builds synthetic PAK/WAD3/BSP/MDL files in memory
@@ -109,6 +113,7 @@ touching any of the asset loaders.
 - [x] CS:GO-inspired main menu (`csmenu`): top nav bar (Play/Watch/Inventory/Store), built-in bitmap-font UI toolkit (no external font/image libs), functional Store → buy case → Inventory → open case → reveal loop with rarity tiers/odds matching CS:GO's real distribution (79.92% Mil-Spec / 15.98% Restricted / 3.2% Classified / 0.64% Covert / 0.26% Special)
 - All of the above verified against real CS 1.5 release assets (`de_dust2.bsp`, multiple `.wad` files, `urban.mdl`, all 87 weapon models), not just compiled
 - [x] Sound engine: own RIFF/WAVE parser (`assets/wav.*`, PCM 8/16-bit mono/stereo) feeding an SDL audio-callback mixer (`audio/audio.*`) that plays any number of simultaneous 2D and 3D voices — 3D voices get linear distance falloff and a stereo pan derived from position relative to the listener's right vector. Wired into gameplay: gunshots and reloads (2D, always full volume to the shooter), jump, footsteps (fired every `kFootstepInterval` units walked, not every frame), and breakable destruction (3D, at the impact point) — same graceful-load pattern as the particle/decal systems: a missing `sound/` directory just means silence, not a crash, since no game audio assets ship with this engine. New `snd_volume` cvar controls master volume.
+- [x] Named per-body-part hitboxes with damage multipliers: `assets/mdl.{h,cpp}` now parses a model's real hitbox lump (`mstudiobbox_t` — bone index, HITGROUP id, bone-local AABB) and classifies each one by the HL SDK's actual `HITGROUP_*` constants (0 generic, 1 head, 2 chest, 3 stomach, 4/5 left/right arm, 6/7 left/right leg) rather than guessing from bone names. `MdlModel::poseHitboxes()` transforms every hitbox into a world-space AABB at any bind or animated pose (refactored the existing bone-world-transform math out of `pose()` into shared helpers so both use the same code path). `hitboxes.h` adds the actual per-body-part damage multipliers (head 4x, stomach 1.25x, limbs 0.75x, chest/generic 1x) and `traceHitboxes()`, a slab-method ray-vs-AABB test that picks the nearest hit box. Verified with synthetic two-bone/two-hitbox fixtures (`test_mdl.cpp`, `test_hitboxes.cpp`) and a new `hitboxtest` debug tool (prints a model's hitboxes/body parts/world bounds, same convention as `mdlbatchtest`/`modelshot`) for checking against real assets. Now wired into actual damage — bots (see the Bots & AI entry below) are the opposing entity this needed, and the player's hitscan resolves to their real posed hitboxes.
 
 ## To Do — what's still needed for a full, playable Counter-Strike
 
@@ -135,12 +140,12 @@ touching any of the asset loaders.
 - [x] Entity system (`entities.h/.cpp`): all spawn points (CT/T-tagged) instead of just the first found, real bomb-target/buy-zone regions from BSP submodel bounds, live "BOMBSITE"/"BUY ZONE" HUD indicators — verified against de_dust2's real entity counts (40 spawns, 2 bomb targets, 2 buy zones). `func_door`/`func_plat`/`func_breakable` now simulate (see `brush_entities.h/.cpp` and the Physics & Movement entry above); `func_button`, triggers, and lights are still just static unparsed geometry/data.
 - [x] Basic hitscan firing: left click, 30-round magazine, R to reload, impact marker at the hit point — no damage/recoil/spread/switching yet, and only one weapon (AK47) is wired in at all
 - [x] Player health/death/respawn (`game_state.h/.cpp`): fall damage + a debug damage key, death freezes movement/shooting, auto-respawn at a random spawn point. No armor yet.
-- [x] Round system (partial): Live/Intermission timer loop, round ends on timeout or death, HUD banner + auto-respawn into the next round. No real win conditions (needs opposing entities/AI), no buy-time phase, no economy loop yet — see the in-round buy menu item below.
-- [x] Bomb defusal logic (`de_` maps): plant (T, hold E in a real func_bomb_target zone, 3s) and defuse (CT, hold E within 80 units of the bomb, 5s), 35s fuse, real win/loss round-end banners. Single-player only — no bots to plant/defuse against, and the bomb carries no visible world model yet.
+- [x] Round system (partial): Live/Intermission timer loop, round ends on timeout, death, or now bot elimination too, HUD banner + auto-respawn into the next round. No buy-time phase, no real economy loop yet — see the in-round buy menu item below.
+- [x] Bomb defusal logic (`de_` maps): plant (T, hold E in a real func_bomb_target zone, 3s) and defuse (CT, hold E within 80 units of the bomb, 5s), 35s fuse, real win/loss round-end banners. Still only the player can plant/defuse — bots (see Bots & AI) fight but don't touch bomb zones yet, and the bomb carries no visible world model.
 - [ ] Hostage rescue mode logic (`cs_` maps)
 - [x] Team assignment (`PlayerState.team`) drives team-based spawn selection for both initial spawn and respawn. No team-select screen, no auto-balance, no other players — 'N' is a debug key to switch team for testing.
 - [x] HUD: crosshair, ammo, weapon name, health, round timer, money, team, zone/plant/defuse/bomb indicators, damage flash, and a real per-map radar (loads `cstrike/overviews/<map>.bmp`, player dot from our own BSP world bounds — not the overview file's own undocumented zoom/origin metadata)
-- [x] In-round buy menu (`weapons.h`): B key, gated to standing in a real func_buyzone + round live, weapon catalog with prices, deducts money and swaps the equipped weapon/ammo. Money system: starts at 800, flat per-round reward (no real win/loss economy tied to it yet). Only affects the primary weapon slot — no pistol/grenade/armor purchases, no per-team price differences yet.
+- [x] In-round buy menu (`weapons.h`): B key, gated to standing in a real func_buyzone + round live, full weapon catalog (25 weapons, one buy-menu column per category) with prices, deducts money and swaps the equipped weapon/magazine+reserve ammo. Money system: starts at 800, flat per-round reward (no real win/loss economy tied to it yet). Still a single weapon slot — buying a new gun replaces whatever's equipped, there's no separate pistol/primary/grenade/armor slots or per-team price differences yet.
 - [x] Scoreboard (hold Tab): real CT/T round-win tally, player's own team/money/health/round number. No player roster or kill count — single-player only, nothing else to list.
 
 ### Main Menu / Meta-game
@@ -192,12 +197,12 @@ single-player-only foundation already exists elsewhere in this README.
 - [ ] A mode/gametype selector at all — today `csmenu`'s PLAY only picks a map and always launches the same single-player round loop
 
 ### Weapon system depth
-- [ ] Data-driven weapon definitions (external data, not hardcoded values) covering: price, damage, fire rate, magazine/reserve ammo, reload time, move-speed penalty, accuracy/spread curves (stand/crouch/move/jump), recoil pattern + recovery, armor penetration, damage falloff by range, headshot multiplier, draw/holster time
-- [ ] Named per-body-part hitboxes (head, chest, stomach, arms, legs) with independent damage multipliers — currently hitscan does undifferentiated flat damage to one PlayerState, no hitbox geometry at all
+- [x] Full weapon roster across categories (`weapons.h`'s `kWeaponCatalog`): melee (knife), 6 pistols, 5 SMGs, 2 shotguns, 6 rifles, 4 snipers, 1 heavy (M249) — 25 weapons total, each with its own price/model/magazine+reserve ammo/damage/fire-rate/full-auto flag/move-speed scale, buyable from a per-category buy-menu layout and fully swappable at runtime (view model, animations, ammo, fire behavior). Fire rate and full-auto vs. semi-auto are both real now (a cooldown timer gated by each weapon's `fireRateRpm`, instead of every weapon firing once per click), reload respects actual magazine/reserve sizes instead of refilling a hardcoded 30, and per-category fire sounds play through the new audio engine. Data-driven in the sense of "one static table describing every weapon", not yet "loaded from external data files" — see the row below.
+- [ ] External data-driven weapon definitions (loaded from a data file at runtime, not a compiled-in C++ table) — plus depth the current table doesn't model at all: accuracy/spread curves (stand/crouch/move/jump), recoil pattern + recovery, armor penetration, damage falloff by range, headshot multiplier, draw/holster time, reload *time* (ammo currently refills instantly on 'R')
+- [x] Named per-body-part hitboxes (head, chest, stomach, arms, legs) with independent damage multipliers — parsing, world-space transform, and the ray-vs-hitbox trace itself are done (see Status above), and now actually connected to a damage event: the player's hitscan resolves to a specific bot's real posed hitbox (see the Bots & AI entry below), so headshots vs. bots deal real 4x damage. The player themself still only ever takes flat damage back (bots don't hit-test the player's own hitboxes yet), and there's no networked second player to test PvP-vs-PvP hit detection with.
 - [ ] Learnable, non-random-feeling recoil patterns (deterministic vertical+horizontal pattern + bounded randomness + recovery-over-time), first-shot accuracy, moving/jumping/crouching accuracy modifiers
 - [ ] Armor/helmet damage reduction model
 - [ ] Bullet penetration through thin materials ("wallbang")
-- [ ] Full weapon roster across categories (pistols/SMGs/shotguns/rifles/snipers/heavy/melee) — only one rifle (AK47) is wired into gameplay today, even though all 87 view/world/pickup models already load
 - [ ] Server-side hit validation (moot until there's a client/server split at all — see Networking)
 
 ### Grenades & thrown utility
@@ -217,10 +222,10 @@ single-player-only foundation already exists elsewhere in this README.
 - [ ] Voice chat: team/party/lobby channels, push-to-talk vs. open mic, per-player mute, muted-after-death-in-some-modes rule
 
 ### Bots & AI
-- [ ] Any bot/AI opponent at all — the engine is single-player-vs-nothing today; every round system (plant/defuse/elimination) has no opposing side to actually contest it
+- [x] A real bot/AI opponent (`bots.h`/`bots.cpp`): spawns on the team opposite the player at each team's own spawn points, perceives the player (line-of-sight raycast + max view distance), and moves/fights with a small Idle → Chase → Attack state machine — closing to an engage distance then holding position and firing, or wandering to a random nearby point when it can't see the player. Firing applies real damage to the player (`damagePlayer`), and being shot back finally puts the hitbox system to use: the player's hitscan resolves to a specific bot's actual posed, transformed-to-world hitbox (`MdlModel::poseHitboxes()` + `transformHitboxesToWorld()` + `hitboxes.h`'s `traceHitboxes()`), so headshots genuinely deal 4x damage instead of a flat per-bot number. Round integration is real too: all opposing bots dead (and no bomb ticking) now ends the round as a genuine elimination win (`endRound(..., "ELIMINATED")`), scored to the player's side, and bots respawn at the start of each new round exactly like the player does. Verified with unit tests against a synthetic open map (`test_bots.cpp`): spawn/team placement, damage/death/respawn, the hitbox rotate+translate math, and the perceive→engage→fire loop itself (a nearby visible player gets shot at; a far-away one doesn't). Not a full bot AI: one shared difficulty (no tiers), perception is sight-only (no simulated hearing/reaction delay), hit resolution against the player currently damages flat rather than through their own hitboxes (only bots have hitbox-based damage so far), and movement is direct-line steering with the player's own wall-slide collision — no navmesh/waypoint graph, no buy decisions, no site attack/defense/rotations, no coordination between bots. Those remain open below.
 - [ ] Bot difficulty tiers (Beginner → Expert)
-- [ ] Bot perception (simulated hearing/sight, reaction time — not omniscient aim/wallhacking)
-- [ ] Bot navigation (a navmesh or waypoint graph — no such data exists for any map yet)
+- [ ] Fuller bot perception: simulated hearing (react to nearby gunfire/footsteps without direct sight) and a reaction-time delay before firing — today's bots see instantly and perfectly within line of sight/view distance, no omniscient aim/wallhacking, but also no "notice, then react" delay
+- [ ] Bot navigation (a navmesh or waypoint graph — bots currently steer in a straight line toward their target and can get stuck on geometry a real path would route around)
 - [ ] Bot tactical behavior: buy decisions, site attack/defense, rotations, plant/defuse, utility usage, team coordination/callouts between bots
 
 ### Matchmaking, ranking & social

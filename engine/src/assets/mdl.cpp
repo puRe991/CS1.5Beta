@@ -87,6 +87,18 @@ struct StudioAttachment {
     float vectors[3][3];
 };
 
+// Matches mstudiobbox_t (32 bytes): the bone it rides on, a hit-group id
+// (the HL SDK's HITGROUP_* constants — 0 generic, 1 head, 2 chest, 3
+// stomach, 4/5 left/right arm, 6/7 left/right leg — the actual, canonical
+// way the original engine assigns body regions, not a name guess), and a
+// bone-local axis-aligned box.
+struct StudioBBox {
+    int32_t bone;
+    int32_t group;
+    float bbMin[3];
+    float bbMax[3];
+};
+
 // Matches mstudioseqdesc_t (176 bytes) — only the fields playback needs are
 // named; the rest (events, pivots, per-sequence bounding box, transition
 // graph) are skipped over via padding since nothing here uses them yet.
@@ -329,7 +341,89 @@ std::vector<MdlTriangle> buildTriangles(const StudioHeader* hdr, const std::vect
     return triangles;
 }
 
+// Bind-pose world transform for every bone: each bone's static value[6]
+// composed with its (already-resolved) parent. Shared by load() (for the
+// bind-pose triangles/attachments/hitboxes) and pose()/poseHitboxes() as
+// the fallback when no animated sequence applies.
+std::vector<BoneXform> computeBindBoneWorld(const StudioHeader* hdr, const StudioBone* bones) {
+    std::vector<BoneXform> boneWorld(bones ? hdr->numBones : 0);
+    for (int32_t i = 0; bones && i < hdr->numBones; ++i) {
+        BoneXform local = makeLocal(bones[i].value);
+        bool validParent = bones[i].parent >= 0 && bones[i].parent < i;
+        boneWorld[i] = validParent ? compose(boneWorld[bones[i].parent], local) : local;
+    }
+    return boneWorld;
+}
+
+// Animated world transform for every bone at a fractional frame within one
+// sequence, decoding that sequence's compressed per-bone tracks the same
+// way pose() does. Returns an empty vector if the sequence can't be played
+// (out of range, or its data lives in an unsupported external seqgroup).
+std::vector<BoneXform> computeAnimatedBoneWorld(const StudioHeader* hdr, const std::vector<uint8_t>& data,
+                                                 const StudioBone* bones, const StudioSeqDesc& seq,
+                                                 float frame, float blend) {
+    if (seq.seqGroup != 0) return {};
+    frame = std::clamp(frame, 0.0f, (float)(seq.numFrames - 1));
+    int32_t numBlends = std::max(1, seq.numBlends);
+    if (hdr->numBones <= 0 || numBlends > INT32_MAX / hdr->numBones) return {};
+    const StudioAnim* anims = spanAt<StudioAnim>(data, seq.animIndex, numBlends * hdr->numBones);
+    if (!anims) return {};
+
+    float blendPos = std::clamp(blend, 0.0f, 1.0f) * (float)(numBlends - 1);
+    int32_t blendA = (int32_t)blendPos;
+    int32_t blendB = std::min(blendA + 1, numBlends - 1);
+    float blendT = blendPos - (float)blendA;
+
+    std::vector<BoneXform> boneWorld(hdr->numBones);
+    for (int32_t i = 0; i < hdr->numBones; ++i) {
+        float valueA[6], valueB[6];
+        extractBoneFrame(bones[i], anims[(size_t)blendA * hdr->numBones + i], frame, valueA);
+        float value[6];
+        if (blendA == blendB) {
+            std::memcpy(value, valueA, sizeof(value));
+        } else {
+            extractBoneFrame(bones[i], anims[(size_t)blendB * hdr->numBones + i], frame, valueB);
+            for (int c = 0; c < 6; ++c) value[c] = valueA[c] + (valueB[c] - valueA[c]) * blendT;
+        }
+        BoneXform local = makeLocal(value);
+        bool validParent = bones[i].parent >= 0 && bones[i].parent < i;
+        boneWorld[i] = validParent ? compose(boneWorld[bones[i].parent], local) : local;
+    }
+    return boneWorld;
+}
+
+// The HL SDK's HITGROUP_* constants (public, engine-defined ids — not
+// copyrightable text), the actual mapping the original engine uses to turn
+// a hitbox's raw group number into a named body region.
+BodyPart bodyPartForGroupImpl(int32_t group) {
+    switch (group) {
+        case 1: return BodyPart::Head;
+        case 2: return BodyPart::Chest;
+        case 3: return BodyPart::Stomach;
+        case 4: return BodyPart::LeftArm;
+        case 5: return BodyPart::RightArm;
+        case 6: return BodyPart::LeftLeg;
+        case 7: return BodyPart::RightLeg;
+        default: return BodyPart::Generic;
+    }
+}
+
 } // namespace
+
+BodyPart bodyPartForHitGroup(int group) { return bodyPartForGroupImpl(group); }
+
+const char* bodyPartName(BodyPart part) {
+    switch (part) {
+        case BodyPart::Head:     return "Head";
+        case BodyPart::Chest:    return "Chest";
+        case BodyPart::Stomach:  return "Stomach";
+        case BodyPart::LeftArm:  return "Left Arm";
+        case BodyPart::RightArm: return "Right Arm";
+        case BodyPart::LeftLeg:  return "Left Leg";
+        case BodyPart::RightLeg: return "Right Leg";
+        default:                 return "Generic";
+    }
+}
 
 bool MdlModel::load(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -352,14 +446,7 @@ bool MdlModel::load(const std::string& path) {
 
     // --- Bones: compute a world-space bind-pose transform for each ---
     const StudioBone* bones = spanAt<StudioBone>(data, hdr->boneIndex, hdr->numBones);
-    std::vector<BoneXform> boneWorld(bones ? hdr->numBones : 0);
-    for (int32_t i = 0; bones && i < hdr->numBones; ++i) {
-        BoneXform local = makeLocal(bones[i].value);
-        // A parent must already be resolved, i.e. appear earlier in the list;
-        // anything else (forward or self reference) is treated as rootless.
-        bool validParent = bones[i].parent >= 0 && bones[i].parent < i;
-        boneWorld[i] = validParent ? compose(boneWorld[bones[i].parent], local) : local;
-    }
+    std::vector<BoneXform> boneWorld = computeBindBoneWorld(hdr, bones);
 
     // --- Textures ---
     textures_.clear();
@@ -404,6 +491,22 @@ bool MdlModel::load(const std::string& path) {
             apply(boneWorld[boneIdx], sa.org[0], sa.org[1], sa.org[2], att.x, att.y, att.z);
         }
         attachments_.push_back(std::move(att));
+    }
+
+    // --- Hitboxes: per-bone hit-group boxes used for damage detection.
+    // Stored in bone-local space here; poseHitboxes() transforms them into
+    // world space at whatever pose is currently active. ---
+    hitboxes_.clear();
+    const StudioBBox* studioBoxes = spanAt<StudioBBox>(data, hdr->hitboxIndex, hdr->numHitboxes);
+    for (int32_t i = 0; studioBoxes && i < hdr->numHitboxes; ++i) {
+        const StudioBBox& sb = studioBoxes[i];
+        MdlHitbox hb;
+        hb.bone = sb.bone;
+        hb.group = sb.group;
+        hb.part = bodyPartForHitGroup(sb.group);
+        hb.mins[0] = sb.bbMin[0]; hb.mins[1] = sb.bbMin[1]; hb.mins[2] = sb.bbMin[2];
+        hb.maxs[0] = sb.bbMax[0]; hb.maxs[1] = sb.bbMax[1]; hb.maxs[2] = sb.bbMax[2];
+        hitboxes_.push_back(hb);
     }
 
     // --- Sequences: name/fps/frame count for playback, actual per-bone
@@ -452,49 +555,65 @@ std::vector<MdlTriangle> MdlModel::pose(int sequenceIndex, float frame, float bl
     const StudioBone* bones = spanAt<StudioBone>(data, hdr->boneIndex, hdr->numBones);
     const StudioSeqDesc* seqDescs = spanAt<StudioSeqDesc>(data, hdr->seqIndex, hdr->numSeq);
     if (!bones || !seqDescs || sequenceIndex >= hdr->numSeq) return triangles_;
-    const StudioSeqDesc& seq = seqDescs[sequenceIndex];
 
     // Only sequences embedded in the main file (seqgroup 0, no external
     // demand-loaded animation blob) are supported — true of every sequence
     // in the CS1.5 asset set this was tested against.
-    if (seq.seqGroup != 0) return triangles_;
-
-    frame = std::clamp(frame, 0.0f, (float)(seq.numFrames - 1));
-    int32_t numBlends = std::max(1, seq.numBlends);
-
-    // The animation block holds numBlends * numBones entries back to back;
-    // validate the whole span before indexing into it below.
-    if (hdr->numBones <= 0 || numBlends > INT32_MAX / hdr->numBones) return triangles_;
-    const StudioAnim* anims = spanAt<StudioAnim>(data, seq.animIndex, numBlends * hdr->numBones);
-    if (!anims) return triangles_;
-
-    // Directional-blend sequences (e.g. a 9-way aim/shoot set) store
-    // numBlends full copies of the per-bone animation data back to back —
-    // [blend][bone] — so pick two adjacent blends by the normalized
-    // `blend` parameter and linearly interpolate the bones' decoded
-    // values between them. With numBlends == 1 (almost everything) this
-    // degenerates to blendA == blendB and costs one redundant decode.
-    float blendPos = std::clamp(blend, 0.0f, 1.0f) * (float)(numBlends - 1);
-    int32_t blendA = (int32_t)blendPos;
-    int32_t blendB = std::min(blendA + 1, numBlends - 1);
-    float blendT = blendPos - (float)blendA;
-
-    std::vector<BoneXform> boneWorld(hdr->numBones);
-    for (int32_t i = 0; i < hdr->numBones; ++i) {
-        float valueA[6], valueB[6];
-        extractBoneFrame(bones[i], anims[(size_t)blendA * hdr->numBones + i], frame, valueA);
-        float value[6];
-        if (blendA == blendB) {
-            std::memcpy(value, valueA, sizeof(value));
-        } else {
-            extractBoneFrame(bones[i], anims[(size_t)blendB * hdr->numBones + i], frame, valueB);
-            for (int c = 0; c < 6; ++c) value[c] = valueA[c] + (valueB[c] - valueA[c]) * blendT;
-        }
-        BoneXform local = makeLocal(value);
-        // Same rule as the bind pose: a parent must appear earlier in the list.
-        bool validParent = bones[i].parent >= 0 && bones[i].parent < i;
-        boneWorld[i] = validParent ? compose(boneWorld[bones[i].parent], local) : local;
-    }
+    std::vector<BoneXform> boneWorld = computeAnimatedBoneWorld(hdr, data, bones, seqDescs[sequenceIndex], frame, blend);
+    if (boneWorld.empty()) return triangles_;
 
     return buildTriangles(hdr, data, boneWorld, textures_);
+}
+
+std::vector<WorldHitbox> MdlModel::poseHitboxes(int sequenceIndex, float frame, float blend) const {
+    std::vector<WorldHitbox> out;
+    if (hitboxes_.empty() || fileData_.empty()) return out;
+
+    const std::vector<uint8_t>& data = fileData_;
+    if (data.size() < sizeof(StudioHeader)) return out;
+    const StudioHeader* hdr = reinterpret_cast<const StudioHeader*>(data.data());
+    const StudioBone* bones = spanAt<StudioBone>(data, hdr->boneIndex, hdr->numBones);
+    if (!bones) return out;
+
+    std::vector<BoneXform> boneWorld;
+    if (sequenceIndex >= 0) {
+        const StudioSeqDesc* seqDescs = spanAt<StudioSeqDesc>(data, hdr->seqIndex, hdr->numSeq);
+        if (seqDescs && sequenceIndex < hdr->numSeq) {
+            boneWorld = computeAnimatedBoneWorld(hdr, data, bones, seqDescs[sequenceIndex], frame, blend);
+        }
+    }
+    if (boneWorld.empty()) boneWorld = computeBindBoneWorld(hdr, bones); // no sequence, or one that failed to decode
+
+    for (const MdlHitbox& hb : hitboxes_) {
+        if (hb.bone < 0 || (size_t)hb.bone >= boneWorld.size()) continue;
+        const BoneXform& x = boneWorld[hb.bone];
+
+        // A rotated box's 8 corners transformed individually, re-enclosed
+        // into an axis-aligned world box — conservative (can be a little
+        // larger than the exact rotated volume) but simple and correct for
+        // a hit test, same tradeoff the original engine's own AABB-only
+        // hit detection makes.
+        float wmin[3] = {1e30f, 1e30f, 1e30f};
+        float wmax[3] = {-1e30f, -1e30f, -1e30f};
+        for (int c = 0; c < 8; ++c) {
+            float local[3] = {
+                (c & 1) ? hb.maxs[0] : hb.mins[0],
+                (c & 2) ? hb.maxs[1] : hb.mins[1],
+                (c & 4) ? hb.maxs[2] : hb.mins[2],
+            };
+            float wx, wy, wz;
+            apply(x, local[0], local[1], local[2], wx, wy, wz);
+            wmin[0] = std::min(wmin[0], wx); wmax[0] = std::max(wmax[0], wx);
+            wmin[1] = std::min(wmin[1], wy); wmax[1] = std::max(wmax[1], wy);
+            wmin[2] = std::min(wmin[2], wz); wmax[2] = std::max(wmax[2], wz);
+        }
+
+        WorldHitbox whb;
+        whb.bone = hb.bone;
+        whb.part = hb.part;
+        whb.mins[0] = wmin[0]; whb.mins[1] = wmin[1]; whb.mins[2] = wmin[2];
+        whb.maxs[0] = wmax[0]; whb.maxs[1] = wmax[1]; whb.maxs[2] = wmax[2];
+        out.push_back(whb);
+    }
+    return out;
 }

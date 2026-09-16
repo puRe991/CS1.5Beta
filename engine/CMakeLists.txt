@@ -30,6 +30,7 @@ add_executable(cs15engine
     src/render/skybox.cpp
     src/render/particles.cpp
     src/render/decals.cpp
+    src/bots.cpp
 )
 
 target_include_directories(cs15engine PRIVATE ${SDL2_INCLUDE_DIRS} src)
@@ -63,6 +64,14 @@ add_executable(mdlbatchtest
     src/assets/mdl.cpp
 )
 target_include_directories(mdlbatchtest PRIVATE src)
+
+# Debug tool: loads one .mdl file and prints its parsed hitboxes (bone,
+# HITGROUP id, body part, bind-pose world AABB).
+add_executable(hitboxtest
+    src/tools/hitboxtest.cpp
+    src/assets/mdl.cpp
+)
+target_include_directories(hitboxtest PRIVATE src)
 
 # Debug tool: loads a list of .spr files and reports parse pass/fail per file.
 add_executable(sprbatchtest
@@ -103,3 +112,6 @@ add_unit_test(test_bsp src/assets/bsp.cpp src/assets/wad.cpp)
 add_unit_test(test_mdl src/assets/mdl.cpp)
 add_unit_test(test_entities src/entities.cpp src/assets/bsp.cpp src/assets/wad.cpp)
 add_unit_test(test_wav src/assets/wav.cpp)
+add_unit_test(test_weapons)
+add_unit_test(test_hitboxes src/assets/mdl.cpp)
+add_unit_test(test_bots src/bots.cpp src/game_state.cpp src/entities.cpp src/brush_entities.cpp src/assets/bsp.cpp src/assets/wad.cpp)

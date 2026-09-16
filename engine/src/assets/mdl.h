@@ -29,6 +29,34 @@ struct MdlAttachment {
     float x = 0, y = 0, z = 0;
 };
 
+// A hitbox's owning body region, from the HL SDK's HITGROUP_* constants —
+// the actual mapping the original engine uses (a hitbox carries a raw group
+// number, 0-7, with this fixed meaning), not a naming guess.
+enum class BodyPart { Generic, Head, Chest, Stomach, LeftArm, RightArm, LeftLeg, RightLeg };
+
+const char* bodyPartName(BodyPart part);
+BodyPart bodyPartForHitGroup(int group);
+
+// One hit-detection box (mstudiobbox_t), in the space of the bone it rides
+// on — use MdlModel::poseHitboxes() to get these transformed into
+// world-space AABBs at a given pose.
+struct MdlHitbox {
+    int bone = -1;
+    int group = 0; // raw HITGROUP_* id
+    BodyPart part = BodyPart::Generic;
+    float mins[3] = {0, 0, 0};
+    float maxs[3] = {0, 0, 0}; // bone-local space
+};
+
+// One hitbox's current world-space axis-aligned bounds at whatever pose
+// MdlModel::poseHitboxes() was asked for.
+struct WorldHitbox {
+    int bone = -1;
+    BodyPart part = BodyPart::Generic;
+    float mins[3] = {0, 0, 0};
+    float maxs[3] = {0, 0, 0};
+};
+
 // One animation sequence (mstudioseqdesc_t): "idle1", "walk", "shoot1", etc.
 struct MdlSequence {
     std::string name;
@@ -59,6 +87,17 @@ public:
     const std::vector<MdlSequence>& sequences() const { return sequences_; }
     int findSequence(const std::string& name) const;
 
+    // Bone-local hitboxes, as parsed from the file (empty if the model has
+    // none — true of some non-character models).
+    const std::vector<MdlHitbox>& hitboxes() const { return hitboxes_; }
+
+    // Every hitbox's world-space AABB at a given pose: sequenceIndex < 0 (or
+    // one that fails to decode) uses the bind pose, otherwise the same
+    // fractional-frame/blend animation pose() would compute — so a caller
+    // tracking a model's current animation state can hit-test against
+    // exactly the pose it's rendering.
+    std::vector<WorldHitbox> poseHitboxes(int sequenceIndex, float frame, float blend = 0.5f) const;
+
     // Computes the mesh posed at a fractional frame (0..numFrames-1,
     // interpolated) within one sequence, by decoding that sequence's
     // per-bone compressed animation tracks and re-skinning every vertex.
@@ -79,5 +118,6 @@ private:
     std::vector<MdlTexture> textures_;
     std::vector<MdlAttachment> attachments_;
     std::vector<MdlSequence> sequences_;
+    std::vector<MdlHitbox> hitboxes_;
     std::vector<uint8_t> fileData_; // kept alive so pose() can re-read raw anim data on demand
 };
