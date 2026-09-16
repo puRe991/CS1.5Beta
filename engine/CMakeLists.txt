@@ -21,6 +21,8 @@ add_executable(cs15engine
     src/assets/mdl.cpp
     src/assets/spr.cpp
     src/assets/tga.cpp
+    src/assets/wav.cpp
+    src/audio/audio.cpp
     src/ui/ui.cpp
     src/render/glext.cpp
     src/render/shader.cpp
@@ -100,3 +102,4 @@ add_unit_test(test_wad src/assets/wad.cpp)
 add_unit_test(test_bsp src/assets/bsp.cpp src/assets/wad.cpp)
 add_unit_test(test_mdl src/assets/mdl.cpp)
 add_unit_test(test_entities src/entities.cpp src/assets/bsp.cpp src/assets/wad.cpp)
+add_unit_test(test_wav src/assets/wav.cpp)

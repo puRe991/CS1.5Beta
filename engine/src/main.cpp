@@ -24,6 +24,7 @@
 #include "render/skybox.h"
 #include "render/particles.h"
 #include "render/decals.h"
+#include "audio/audio.h"
 
 namespace {
 const char* kWorldVertexShader = R"(#version 120
@@ -176,6 +177,7 @@ static Cvar cl_fov("fov", "90", CVAR_ARCHIVE, "horizontal-ish field of view, deg
 static Cvar r_width("width", "1280", CVAR_ARCHIVE, "window width in pixels");
 static Cvar r_height("height", "720", CVAR_ARCHIVE, "window height in pixels");
 static Cvar r_vsync("vsync", "1", CVAR_ARCHIVE, "1 = vsync on, 0 = off");
+static Cvar snd_volume("snd_volume", "1.0", CVAR_ARCHIVE, "master sound volume, 0-1");
 static const char* kConfigPath = "config.cfg";
 
 int main(int argc, char** argv) {
@@ -224,7 +226,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
     }
@@ -373,6 +375,24 @@ int main(int argc, char** argv) {
     std::vector<int> bloodDecals = decals.loadGroup(wadDir + "/decals.wad",
         {"{blood1", "{blood2", "{blood3", "{blood4", "{blood5", "{blood6"}, 90, 4, 4);
 
+    // Sound: same graceful-load approach as the particle/decal groups above —
+    // a missing sound/ directory just means silence, not a crash. Paths
+    // follow GoldSrc's own sound tree layout under wadDir/sound/.
+    AudioEngine audio;
+    audio.init(); // no-op device if the platform/SDL build has no audio backend
+    audio.setMasterVolume(snd_volume.AsFloat());
+    int sndShoot = audio.loadSound(wadDir + "/sound/weapons/ak47-1.wav");
+    int sndReload = audio.loadSound(wadDir + "/sound/weapons/ak47_clipout.wav");
+    int sndJump = audio.loadSound(wadDir + "/sound/player/pl_jump1.wav");
+    std::vector<int> sndFootsteps = {
+        audio.loadSound(wadDir + "/sound/player/pl_step1.wav"),
+        audio.loadSound(wadDir + "/sound/player/pl_step2.wav"),
+        audio.loadSound(wadDir + "/sound/player/pl_step3.wav"),
+        audio.loadSound(wadDir + "/sound/player/pl_step4.wav"),
+    };
+    int sndDoor = audio.loadSound(wadDir + "/sound/doors/doormove1.wav");
+    int sndBreak = audio.loadSound(wadDir + "/sound/debris/bustcrate1.wav");
+
     EntitySystem entities;
     entities.build(map);
 
@@ -445,6 +465,13 @@ int main(int argc, char** argv) {
     constexpr float kGroundFriction = 6.0f;
     constexpr float kStopSpeed = 100.0f; // below this, friction decelerates faster (a full stop, not a slide)
     float velX = 0.0f, velY = 0.0f;
+
+    // Footstep sound: accumulates distance walked on the ground and fires a
+    // (randomly picked) step sound every kFootstepInterval units, rather
+    // than once per frame — matches the "step per stride", not "step per
+    // tick", cadence real footstep sounds need.
+    constexpr float kFootstepInterval = 90.0f;
+    float footstepDistance = 0.0f;
 
     // --- Ducking: held Ctrl switches to the crouch collision hull (a
     // shorter box) and a lower eye height + move speed. Standing back up
@@ -527,6 +554,7 @@ int main(int argc, char** argv) {
                     viewAnimState = ViewAnimState::Reload;
                     viewAnimTime = 0.0f;
                 }
+                audio.play2D(sndReload, 0.7f);
             } else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_v) {
                 thirdPerson = !thirdPerson;
             } else if (event.type == SDL_MOUSEMOTION && !buyMenuOpen) {
@@ -671,9 +699,21 @@ int main(int argc, char** argv) {
         groundProbe.z -= 2.0f;
         grounded = map.pointInSolidHull(groundProbe, hull) || brushEntities.pointInSolid(map, groundProbe, hull);
 
+        if (grounded && !sndFootsteps.empty() && (forward != 0.0f || strafe != 0.0f)) {
+            footstepDistance += std::sqrt(dx * dx + dy * dy);
+            if (footstepDistance >= kFootstepInterval) {
+                footstepDistance = 0.0f;
+                int step = sndFootsteps[std::rand() % sndFootsteps.size()];
+                audio.play3D(step, Vec3f{camera.x, camera.y, camera.z}, 0.5f, 600.0f);
+            }
+        } else {
+            footstepDistance = 0.0f;
+        }
+
         if (jumpPressed && grounded) {
             velocityZ = kJumpSpeed;
             grounded = false;
+            audio.play2D(sndJump, 0.6f);
         } else if (grounded && velocityZ <= 0.0f) {
             velocityZ = 0.0f;
         } else {
@@ -814,6 +854,7 @@ int main(int argc, char** argv) {
             std::sin(pitchRad)
         };
         Vec3f center{eye.x + forwardDir.x, eye.y + forwardDir.y, eye.z + forwardDir.z};
+        audio.setListener(eye, forwardDir, normalize(cross(forwardDir, Vec3f{0, 0, 1})));
         // Third person: a simple chase camera pulled back behind the
         // player along the same look direction (no collision against
         // world geometry yet, so it can clip into walls in tight spots).
@@ -844,6 +885,7 @@ int main(int argc, char** argv) {
             particles.spawn(fxMuzzleFlash,
                              Vec3f{eye.x + forwardDir.x * 20.0f, eye.y + forwardDir.y * 20.0f, eye.z + forwardDir.z * 20.0f},
                              0.15f, 0.06f);
+            audio.play2D(sndShoot, 0.9f); // 2D: the shooter always hears their own gunfire at full volume
             Vec3 traceStart{eye.x, eye.y, eye.z};
             constexpr float kRange = 4096.0f;
             Vec3 traceEnd{eye.x + forwardDir.x * kRange, eye.y + forwardDir.y * kRange, eye.z + forwardDir.z * kRange};
@@ -865,7 +907,14 @@ int main(int argc, char** argv) {
                 Vec3 p{traceStart.x + forwardDir.x * t, traceStart.y + forwardDir.y * t,
                        traceStart.z + forwardDir.z * t};
                 if (brushEntities.pointInSolid(map, p, 0)) {
+                    int destroyedBefore = 0;
+                    for (const auto& e : brushEntities.entities) if (e.destroyed) ++destroyedBefore;
                     brushEntities.damageAt(p, kBreakableBulletDamage);
+                    int destroyedAfter = 0;
+                    for (const auto& e : brushEntities.entities) if (e.destroyed) ++destroyedAfter;
+                    if (destroyedAfter > destroyedBefore) {
+                        audio.play3D(sndBreak, Vec3f{(float)p.x, (float)p.y, (float)p.z}, 0.8f, 1200.0f);
+                    }
                     hit = p;
                     hitNormal = Vec3{-forwardDir.x, -forwardDir.y, -forwardDir.z};
                     didHit = true;
@@ -1262,6 +1311,7 @@ int main(int argc, char** argv) {
 
     CvarSystem::Get().SaveConfig(kConfigPath);
 
+    audio.shutdown();
     SDL_GL_DeleteContext(glContext);
     SDL_DestroyWindow(window);
     SDL_Quit();
