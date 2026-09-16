@@ -62,8 +62,11 @@ engine/
     ui/
       ui.{h,cpp}          # minimal immediate-mode 2D UI (rects, buttons, text)
       font5x7.h            # built-in 5x7 bitmap font (our own, not copied)
+    audio/
+      audio.{h,cpp}       # SDL audio-callback mixer: WAV cache, 2D/3D voices, distance/pan
     assets/
       limits.h           # shared sanity caps for untrusted asset headers
+      wav.{h,cpp}         # RIFF/WAVE parser: PCM 8/16-bit, mono/stereo
       pak.{h,cpp}        # Quake-style PAK archive reader
       wad.{h,cpp}        # WAD3 texture package parser (palette-indexed -> RGBA8)
       bsp.{h,cpp}        # BSP v30 map parser: geometry, textures, entities, hull collision
@@ -105,6 +108,7 @@ touching any of the asset loaders.
 - [x] Weapon view model rendered in the main engine window (own narrow-FOV pass, positioned over the world view)
 - [x] CS:GO-inspired main menu (`csmenu`): top nav bar (Play/Watch/Inventory/Store), built-in bitmap-font UI toolkit (no external font/image libs), functional Store → buy case → Inventory → open case → reveal loop with rarity tiers/odds matching CS:GO's real distribution (79.92% Mil-Spec / 15.98% Restricted / 3.2% Classified / 0.64% Covert / 0.26% Special)
 - All of the above verified against real CS 1.5 release assets (`de_dust2.bsp`, multiple `.wad` files, `urban.mdl`, all 87 weapon models), not just compiled
+- [x] Sound engine: own RIFF/WAVE parser (`assets/wav.*`, PCM 8/16-bit mono/stereo) feeding an SDL audio-callback mixer (`audio/audio.*`) that plays any number of simultaneous 2D and 3D voices — 3D voices get linear distance falloff and a stereo pan derived from position relative to the listener's right vector. Wired into gameplay: gunshots and reloads (2D, always full volume to the shooter), jump, footsteps (fired every `kFootstepInterval` units walked, not every frame), and breakable destruction (3D, at the impact point) — same graceful-load pattern as the particle/decal systems: a missing `sound/` directory just means silence, not a crash, since no game audio assets ship with this engine. New `snd_volume` cvar controls master volume.
 
 ## To Do — what's still needed for a full, playable Counter-Strike
 
@@ -151,9 +155,7 @@ touching any of the asset loaders.
       it means payment processing, KYC/age verification, and jurisdiction-aware compliance — this needs a
       deliberate legal/business review before any implementation work, not just an engineering pass.
 ### Audio
-- [ ] Sound engine (currently no audio playback at all)
-- [ ] WAV loading and 3D positional audio
-- [ ] Weapon/footstep/ambient sound triggers
+- [x] Sound engine, WAV loading, 3D positional audio, and weapon/jump/footstep/breakable sound triggers — see the Status section above. Not yet covered: ambient/looping map sounds (`play2D`/`play3D` support `loop`, but nothing calls it with `loop=true` yet), material-based footstep variation (surface type isn't tracked, so it's always the same four generic steps), and voice chat (separate item below).
 
 ### Networking
 - [ ] Client-server architecture (currently single-process, no networking)
@@ -211,8 +213,7 @@ single-player-only foundation already exists elsewhere in this README.
 - [ ] Thrown/dropped physical objects (grenades before they're picked up as projectiles, a dropped bomb model, dropped weapons) — physics objects in general, beyond the player's own hull collision
 
 ### Audio
-- [ ] (Everything already listed above under Audio, plus:) material-based footstep sounds (concrete/metal/wood/dirt/grass/stone/water), scaled by movement speed/crouch/distance
-- [ ] Spatial/3D positional audio as a hard requirement for competitive info-gathering (footsteps, reloads, defuse ticks), not just ambience
+- [x] Spatial/3D positional audio (`audio/audio.*` — see Status above); still not scaled by movement speed/crouch, and no material-based footstep sounds (concrete/metal/wood/dirt/grass/stone/water) since surface type isn't tracked yet
 - [ ] Voice chat: team/party/lobby channels, push-to-talk vs. open mic, per-player mute, muted-after-death-in-some-modes rule
 
 ### Bots & AI
