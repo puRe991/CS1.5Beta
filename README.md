@@ -10,6 +10,26 @@ is a preservation archive of the official CS Beta/Pre-1.6 releases — this
 project reuses those assets as real-world test data for the engine, but does
 not ship or redistribute them.
 
+## Getting test assets (`cstrike`)
+
+The engine needs a local copy of a `cstrike` asset directory (`.bsp` maps,
+`.wad` textures, `.mdl` models) to run against. Since these are the
+original proprietary game files, they are not included in this
+repository. Fetch a local copy from the preservation archive with:
+
+```
+./scripts/fetch_cstrike_assets.sh
+```
+
+This downloads the `cstrike/` folder from the `cs15_retail` branch of
+[`Ch0wW/counterstrike-betas`](https://github.com/Ch0wW/counterstrike-betas)
+into `assets/cstrike/` (gitignored, never committed). Pass a different
+target directory or branch as arguments if needed:
+
+```
+./scripts/fetch_cstrike_assets.sh <target-dir> <branch>
+```
+
 ## Building
 
 ```

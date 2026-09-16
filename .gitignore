@@ -1,2 +1,5 @@
 engine/build/
 external_assets/cs2_mod_pack/cs2_mod_pack.zip
+
+# Fetched proprietary CS Beta game assets (see scripts/fetch_cstrike_assets.sh)
+/assets/cstrike/
